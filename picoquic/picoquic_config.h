@@ -56,6 +56,8 @@ typedef enum {
     picoquic_option_BINLOG_DIR,
     picoquic_option_QLOG_DIR,
     picoquic_option_MTU_MAX,
+    picoquic_option_INITIAL_SEND_MTU_IPV4,
+    picoquic_option_INITIAL_SEND_MTU_IPV6,
     picoquic_option_SNI,
     picoquic_option_ALPN,
     picoquic_option_ROOT_TRUST_FILE,
@@ -101,6 +103,8 @@ typedef struct st_picoquic_quic_config_t {
     int nb_threads;
     int dest_if;
     int mtu_max;
+    int initial_send_mtu_ipv4;
+    int initial_send_mtu_ipv6;
     int cnx_id_length;
     int idle_timeout;
     int socket_buffer_size;

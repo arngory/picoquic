@@ -558,6 +558,8 @@ typedef struct st_picoquic_quic_t {
     uint8_t default_datagram_priority;
     uint64_t local_cnxid_ttl; /* Max time to live of Connection ID in microsec, init to "forever" */
     uint32_t mtu_max;
+    uint32_t initial_send_mtu_ipv4;
+    uint32_t initial_send_mtu_ipv6;
     uint32_t padding_multiple_default;
     uint32_t padding_minsize_default;
     uint32_t sequence_hole_pseudo_period; /* Optimistic ack defense */

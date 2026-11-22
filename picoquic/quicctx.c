@@ -1899,6 +1899,18 @@ int picoquic_set_first_if_index(picoquic_cnx_t* cnx, unsigned long if_index)
     return ret;
 }
 
+/* slipstream: the initial MTU set by picoquic_set_initial_send_mtu, if any */
+static uint32_t picoquic_initial_send_mtu(picoquic_quic_t* quic, int sa_family)
+{
+    int is_ipv4 = (sa_family == 0 || sa_family == AF_INET);
+    uint32_t mtu = (is_ipv4) ? quic->initial_send_mtu_ipv4 : quic->initial_send_mtu_ipv6;
+
+    if (mtu == 0) {
+        mtu = (is_ipv4) ? PICOQUIC_INITIAL_MTU_IPV4 : PICOQUIC_INITIAL_MTU_IPV6;
+    }
+    return mtu;
+}
+
 /* Path management -- returns the index of the path that was created. */
 int picoquic_create_path(picoquic_cnx_t* cnx, uint64_t start_time, const struct sockaddr* local_addr,
     const struct sockaddr* peer_addr, int if_index, uint64_t requested_id)
@@ -1953,7 +1965,7 @@ int picoquic_create_path(picoquic_cnx_t* cnx, uint64_t start_time, const struct 
                 picoquic_pacing_init(&path_x->pacing, start_time);
 
                 /* Initialize the MTU */
-                path_x->send_mtu = (peer_addr == NULL || peer_addr->sa_family == AF_INET) ? PICOQUIC_INITIAL_MTU_IPV4 : PICOQUIC_INITIAL_MTU_IPV6;
+                path_x->send_mtu = picoquic_initial_send_mtu(cnx->quic, (peer_addr == NULL) ? 0 : peer_addr->sa_family);
 
                 /* initialize the quality reporting thresholds */
                 path_x->rtt_update_delta = cnx->rtt_update_delta;
@@ -3058,8 +3070,8 @@ void picoquic_update_peer_addr(picoquic_path_t* path_x, const struct sockaddr* p
 void picoquic_reset_path_mtu(picoquic_path_t* path_x)
 {
     /* Re-initialize the MTU */
-    path_x->send_mtu = (path_x->first_tuple->peer_addr.ss_family == 0 || path_x->first_tuple->peer_addr.ss_family == AF_INET) ?
-        PICOQUIC_INITIAL_MTU_IPV4 : PICOQUIC_INITIAL_MTU_IPV6;
+    path_x->send_mtu = picoquic_initial_send_mtu(path_x->cnx->quic,
+        (path_x->first_tuple == NULL) ? 0 : path_x->first_tuple->peer_addr.ss_family);
     /* Reset the MTU discovery context */
     path_x->send_mtu_max_tried = 0;
     path_x->mtu_probe_sent = 0;
@@ -4643,6 +4655,12 @@ void picoquic_set_mtu_max(picoquic_quic_t* quic, uint32_t mtu_max)
     PICOQUIC_THREAD_CHECK(quic);
     quic->mtu_max = mtu_max;
     quic->default_tp.max_packet_size = mtu_max;
+}
+
+void picoquic_set_initial_send_mtu(picoquic_quic_t* quic, uint32_t intitial_mtu_ipv4, uint32_t intitial_mtu_ipv6)
+{
+    quic->initial_send_mtu_ipv4 = intitial_mtu_ipv4;
+    quic->initial_send_mtu_ipv6 = intitial_mtu_ipv6;
 }
 
 void picoquic_set_alpn_select_fn(picoquic_quic_t* quic, picoquic_alpn_select_fn alpn_select_fn)
