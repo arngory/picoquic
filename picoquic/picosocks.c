@@ -1182,9 +1182,10 @@ int picoquic_sendmsg(SOCKET_TYPE fd,
 
     /* Format the message header */
 
-    // calculate segment count
+    /* slipstream: at most 128 segments in one UDP_SEGMENT send, the last one
+     * possibly shorter (so the count rounds up) */
     if (send_msg_size > 0) {
-        const int segment_count = length / send_msg_size;
+        const int segment_count = (length + send_msg_size - 1) / send_msg_size;
         if (segment_count > 128) {
             DBG_PRINTF("Segment count %d too large\n", segment_count);
             return -1;
