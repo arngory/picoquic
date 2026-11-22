@@ -443,6 +443,7 @@ int stream_data_nodes_attack_test(void);
 int vn_bounds_test(void);
 int small_mtu_handshake_test(void);
 int initial_send_mtu_bounds_test(void);
+int path_id_override_test(void);
 int stream_data_nodes_window_test(void);
 int stream_data_nodes_limit_test(void);
 int direct_receive_duplicate_test(void);

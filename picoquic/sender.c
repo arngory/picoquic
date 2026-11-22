@@ -3672,6 +3672,14 @@ void picoquic_handle_send_train_statistics(picoquic_cnx_t* cnx, picoquic_path_t*
     }
 }
 
+/* slipstream: whether a packet can be sent on path_x when the application names it. */
+static int picoquic_is_path_usable_for_send(const picoquic_path_t* path_x)
+{
+    return !path_x->path_is_demoted && !path_x->path_abandon_received && !path_x->path_abandon_sent &&
+        path_x->first_tuple != NULL && !path_x->first_tuple->challenge_failed &&
+        path_x->first_tuple->p_remote_cnxid != NULL;
+}
+
 /* Prepare next packet to send, or nothing..
  * slipstream: path_id_request >= 0 sends on that path (the path of the DNS query
  * that this packet answers), -1 lets picoquic choose. */
@@ -3702,8 +3710,11 @@ int picoquic_prepare_packet_path_ex(picoquic_cnx_t* cnx, int path_id_request,
         picoquic_handle_send_paths(cnx, current_time, &next_wake_time,
             &path_x, &tuple, p_addr_to, p_addr_from, if_index,
             send_buffer_max, send_msg_size);
+        /* slipstream: the requested path replaces picoquic's choice only if a packet can go on it:
+         * not demoted or abandoned, its challenge not failed, and with a connection ID of the peer
+         * (the short header needs one). Otherwise picoquic's choice stands. */
         if (path_id_request >= 0 && path_id_request < cnx->nb_paths && cnx->path[path_id_request] != NULL &&
-            cnx->path[path_id_request] != path_x) {
+            cnx->path[path_id_request] != path_x && picoquic_is_path_usable_for_send(cnx->path[path_id_request])) {
             path_x = cnx->path[path_id_request];
             tuple = path_x->first_tuple;
             picoquic_set_path_addresses_from_tuple(tuple, p_addr_to, p_addr_from, if_index);

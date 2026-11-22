@@ -3165,6 +3165,12 @@ namespace UnitTest1
             Assert::AreEqual(ret, 0);
         }
 
+        TEST_METHOD(path_id_override) {
+            int ret = path_id_override_test();
+
+            Assert::AreEqual(ret, 0);
+        }
+
         TEST_METHOD(stream_data_nodes_window) {
             int ret = stream_data_nodes_window_test();
 

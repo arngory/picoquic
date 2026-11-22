@@ -3909,3 +3909,109 @@ int multipath_idle_path_test(void)
  * 
  * TODO: break that into parts that can be verified!
  */
+
+/* slipstream: picoquic_prepare_packet_path_ex sends on the named path only if a packet can
+ * go on it. A demoted path, or one without a connection ID of the peer (the short header
+ * dereferenced it), falls back to picoquic's own choice. */
+static int path_id_override_send(picoquic_test_tls_api_ctx_t* test_ctx, int path_id, uint64_t simulated_time,
+    struct sockaddr_storage* addr_to, size_t* send_length)
+{
+    uint8_t send_buffer[PICOQUIC_MAX_PACKET_SIZE];
+    uint8_t data[64] = { 0 };
+    struct sockaddr_storage addr_from;
+    int if_index = 0;
+    int ret = picoquic_add_to_stream(test_ctx->cnx_server, 1, data, sizeof(data), 0);
+
+    memset(addr_to, 0, sizeof(*addr_to));
+    if (ret == 0) {
+        ret = picoquic_prepare_packet_path_ex(test_ctx->cnx_server, path_id, simulated_time, send_buffer,
+            sizeof(send_buffer), send_length, addr_to, &addr_from, &if_index, NULL);
+    }
+    return ret;
+}
+
+int path_id_override_test(void)
+{
+    uint64_t simulated_time = 0;
+    uint64_t loss_mask = 0;
+    picoquic_test_tls_api_ctx_t* test_ctx = NULL;
+    picoquic_connection_id_t initial_cid = { {0x1b, 0x11, 0x0e, 4, 5, 6, 7, 8}, 8 };
+    picoquic_tp_t server_parameters;
+    picoquic_cnx_t* cnx = NULL;
+    struct sockaddr_storage addr_to;
+    size_t send_length = 0;
+    int ret = tls_api_init_ctx_ex2(&test_ctx, PICOQUIC_INTERNAL_TEST_VERSION_1,
+        PICOQUIC_TEST_SNI, PICOQUIC_TEST_ALPN, &simulated_time, NULL, NULL, 0, 1, 0, &initial_cid,
+        8, 0, 0, 0);
+
+    if (ret == 0 && test_ctx == NULL) {
+        ret = -1;
+    }
+    if (ret == 0) {
+        multipath_init_params(&server_parameters, 0);
+        picoquic_set_default_tp(test_ctx->qserver, &server_parameters);
+        test_ctx->cnx_client->local_parameters.initial_max_path_id = 3;
+        picoquic_start_client_cnx(test_ctx->cnx_client);
+        ret = tls_api_connection_loop(test_ctx, &loss_mask, 2 * test_ctx->s_to_c_link->microsec_latency, &simulated_time);
+    }
+    if (ret == 0) {
+        ret = wait_client_connection_ready(test_ctx, &simulated_time);
+    }
+    if (ret == 0) {
+        ret = multipath_test_add_links(test_ctx, 0);
+    }
+    if (ret == 0) {
+        ret = picoquic_probe_new_path(test_ctx->cnx_client, (struct sockaddr*)&test_ctx->server_addr,
+            (struct sockaddr*)&test_ctx->client_addr_2, simulated_time);
+    }
+    if (ret == 0) {
+        ret = wait_multipath_ready(test_ctx, &simulated_time);
+    }
+    if (ret == 0 && ((cnx = test_ctx->cnx_server) == NULL || cnx->nb_paths != 2 ||
+        picoquic_compare_addr((struct sockaddr*)&cnx->path[1]->first_tuple->peer_addr,
+            (struct sockaddr*)&test_ctx->client_addr_2) != 0)) {
+        DBG_PRINTF("%s", "Expected a second path at the server, to the client's second address");
+        ret = -1;
+    }
+    /* A usable path is taken as named */
+    if (ret == 0) {
+        ret = path_id_override_send(test_ctx, 1, simulated_time, &addr_to, &send_length);
+        if (ret == 0 && (send_length == 0 ||
+            picoquic_compare_addr((struct sockaddr*)&addr_to, (struct sockaddr*)&test_ctx->client_addr_2) != 0)) {
+            DBG_PRINTF("Usable path 1 not taken (%zu bytes)", send_length);
+            ret = -1;
+        }
+    }
+    /* A demoted path is not */
+    if (ret == 0) {
+        cnx->path[1]->path_is_demoted = 1;
+        ret = path_id_override_send(test_ctx, 1, simulated_time, &addr_to, &send_length);
+        cnx->path[1]->path_is_demoted = 0;
+        if (ret == 0 && send_length > 0 &&
+            picoquic_compare_addr((struct sockaddr*)&addr_to, (struct sockaddr*)&test_ctx->client_addr_2) == 0) {
+            DBG_PRINTF("%s", "Demoted path 1 taken");
+            ret = -1;
+        }
+    }
+    /* Nor a path without a connection ID of the peer */
+    if (ret == 0) {
+        picoquic_remote_cnxid_t* p_remote_cnxid = cnx->path[1]->first_tuple->p_remote_cnxid;
+        cnx->path[1]->first_tuple->p_remote_cnxid = NULL;
+        ret = path_id_override_send(test_ctx, 1, simulated_time, &addr_to, &send_length);
+        cnx->path[1]->first_tuple->p_remote_cnxid = p_remote_cnxid;
+        if (ret == 0 && send_length > 0 &&
+            picoquic_compare_addr((struct sockaddr*)&addr_to, (struct sockaddr*)&test_ctx->client_addr_2) == 0) {
+            DBG_PRINTF("%s", "Path 1 without a remote connection ID taken");
+            ret = -1;
+        }
+    }
+    /* An index past the paths is ignored */
+    if (ret == 0) {
+        ret = path_id_override_send(test_ctx, 2, simulated_time, &addr_to, &send_length);
+    }
+
+    if (test_ctx != NULL) {
+        tls_api_delete_ctx(test_ctx);
+    }
+    return ret;
+}

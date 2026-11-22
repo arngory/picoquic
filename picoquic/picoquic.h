@@ -1411,6 +1411,11 @@ int picoquic_incoming_packet_ex(
     unsigned char received_ecn,
     picoquic_cnx_t** first_cnx,
     uint64_t current_time);
+/* slipstream: also returns in *first_path_id the index in (*first_cnx)->path of the path
+ * the first packet of the datagram arrived on, or -1. The index is valid only until the
+ * next picoquic call on that connection (paths are deleted and the array compacted):
+ * applications that keep it longer should keep the path's unique_path_id and look the
+ * index up again. */
 int picoquic_incoming_packet_path_ex(
     picoquic_quic_t* quic,
     uint8_t* bytes,
@@ -1446,6 +1451,12 @@ int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
     uint64_t current_time, uint8_t* send_buffer, size_t send_buffer_max, size_t* send_length,
     struct sockaddr_storage* p_addr_to, struct sockaddr_storage* p_addr_from, int* if_index,
     size_t* send_msg_size);
+/* slipstream: path_id_request >= 0 sends on cnx->path[path_id_request], for example the path
+ * of the query that the packet answers (first_path_id of picoquic_incoming_packet_path_ex).
+ * A path index is valid only until the next picoquic call on the connection: paths are
+ * deleted and the array is compacted. If that path cannot take a packet (demoted,
+ * abandoned, its challenge failed, or no connection ID of the peer), picoquic's own choice
+ * is used, as with -1. */
 int picoquic_prepare_packet_path_ex(picoquic_cnx_t* cnx, int path_id_request,
     uint64_t current_time, uint8_t* send_buffer, size_t send_buffer_max, size_t* send_length,
     struct sockaddr_storage* p_addr_to, struct sockaddr_storage* p_addr_from, int* if_index,
