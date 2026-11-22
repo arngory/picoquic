@@ -50,6 +50,12 @@ extern "C" {
  * much room is left. Upstream's 512 is more than a whole packet over DNS (and 32 more
  * than a 64-byte packet holds once the offset takes 4 bytes): the frame
  * was never sent again and the stream stalled. */
+/* slipstream: out of order stream data may take this many times the free receive
+ * window in packet buffers (1536 bytes each) before the connection is closed.
+ * Upstream's 6 assumes full packets; a query carries 30 to 120 bytes. */
+#ifndef PICOQUIC_REORDER_MEMORY_FACTOR
+#define PICOQUIC_REORDER_MEMORY_FACTOR 64
+#endif
 #ifndef PICOQUIC_MIN_STREAM_DATA_FRAGMENT
 #define PICOQUIC_MIN_STREAM_DATA_FRAGMENT 8
 #endif

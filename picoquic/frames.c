@@ -1513,13 +1513,13 @@ static int picoquic_stream_network_input(picoquic_cnx_t* cnx, uint64_t stream_id
             }
 
             if (stream->stream_data_tree.size > 128 &&
-                ((uint64_t)stream->stream_data_tree.size) * 1536 > (stream->maxdata_local - stream->consumed_offset) * 6) {
+                ((uint64_t)stream->stream_data_tree.size) * 1536 > (stream->maxdata_local - stream->consumed_offset) * PICOQUIC_REORDER_MEMORY_FACTOR) {
                 /* This simple check detects abusive scenarios, like sending lots of tiny out of
                  * order packets */
                  ret = picoquic_connection_error(cnx, PICOQUIC_TRANSPORT_INTERNAL_ERROR, 0);
             }
             else if (cnx->nb_stream_data_nodes > 128 &&
-                cnx->nb_stream_data_nodes * 1536 > (cnx->maxdata_local - cnx->data_received) * 6) {
+                cnx->nb_stream_data_nodes * 1536 > (cnx->maxdata_local - cnx->data_received) * PICOQUIC_REORDER_MEMORY_FACTOR) {
                 /* Same check at the connection level, for tiny out of order packets spread over many streams */
                 ret = picoquic_connection_error(cnx, PICOQUIC_TRANSPORT_INTERNAL_ERROR, 0);
             }
