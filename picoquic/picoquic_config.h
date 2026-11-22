@@ -56,8 +56,6 @@ typedef enum {
     picoquic_option_BINLOG_DIR,
     picoquic_option_QLOG_DIR,
     picoquic_option_MTU_MAX,
-    picoquic_option_INITIAL_SEND_MTU_IPV4,
-    picoquic_option_INITIAL_SEND_MTU_IPV6,
     picoquic_option_SNI,
     picoquic_option_ALPN,
     picoquic_option_ROOT_TRUST_FILE,
