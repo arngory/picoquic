@@ -1899,6 +1899,9 @@ int picoquic_set_first_if_index(picoquic_cnx_t* cnx, unsigned long if_index)
     return ret;
 }
 
+/* slipstream: the link-time tag of PICOQUIC_ENFORCED_INITIAL_MTU (picoquic_internal.h) */
+const int PICOQUIC_MTU_TAG = PICOQUIC_ENFORCED_INITIAL_MTU;
+
 /* slipstream: the initial MTU set by picoquic_set_initial_send_mtu, if any.
  * The callers decide which family counts as IPv4, as upstream does. */
 static uint32_t picoquic_initial_send_mtu(picoquic_quic_t* quic, int is_ipv4)

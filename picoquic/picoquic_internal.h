@@ -36,12 +36,54 @@ extern "C" {
 #define PICOQUIC_MAX_PACKET_SIZE 1536
 #endif
 /* slipstream: QUIC over DNS carries packets far below the 1200 bytes of RFC 9000.
- * Both values can be set at build time (-DPICOQUIC_ENFORCED_INITIAL_MTU=64). */
+ * Both values can be set at build time (-DPICOQUIC_ENFORCED_INITIAL_MTU=64).
+ * PICOQUIC_ENFORCED_INITIAL_MTU is the smallest Initial datagram a server takes and a
+ * client sends. It is a protocol constant between the two peers: slipstream uses 64 on
+ * both sides, the default here and in CMakeLists.txt. */
 #ifndef PICOQUIC_MIN_SEGMENT_SIZE
 #define PICOQUIC_MIN_SEGMENT_SIZE 32
 #endif
 #ifndef PICOQUIC_ENFORCED_INITIAL_MTU
-#define PICOQUIC_ENFORCED_INITIAL_MTU 129
+#define PICOQUIC_ENFORCED_INITIAL_MTU 64
+#endif
+/* Below 64, a client Initial does not fit (the padding to the floor went negative, and a
+ * test buffer of the floor's size minus 52 underflows); 1200 is RFC 9000's floor. */
+#if PICOQUIC_ENFORCED_INITIAL_MTU < 64 || PICOQUIC_ENFORCED_INITIAL_MTU > 1200
+#error "PICOQUIC_ENFORCED_INITIAL_MTU must be in [64, 1200]"
+#endif
+/* Every file that includes this header references a symbol named after the value of
+ * PICOQUIC_ENFORCED_INITIAL_MTU, which quicctx.c defines. Code built with another value
+ * than the library then fails to link, for example with "undefined reference to
+ * picoquic_built_with_enforced_initial_mtu_129", instead of running with two floors. */
+#define PICOQUIC_MTU_TAG_CAT2(a, b) a##b
+#define PICOQUIC_MTU_TAG_CAT(a, b) PICOQUIC_MTU_TAG_CAT2(a, b)
+#define PICOQUIC_MTU_TAG_STR2(a) #a
+#define PICOQUIC_MTU_TAG_STR(a) PICOQUIC_MTU_TAG_STR2(a)
+#define PICOQUIC_MTU_TAG PICOQUIC_MTU_TAG_CAT(picoquic_built_with_enforced_initial_mtu_, PICOQUIC_ENFORCED_INITIAL_MTU)
+extern const int PICOQUIC_MTU_TAG;
+#if defined(_MSC_VER)
+#if defined(_M_IX86)
+#pragma comment(linker, "/include:_" PICOQUIC_MTU_TAG_STR(PICOQUIC_MTU_TAG))
+#else
+#pragma comment(linker, "/include:" PICOQUIC_MTU_TAG_STR(PICOQUIC_MTU_TAG))
+#endif
+#elif defined(__GNUC__) || defined(__clang__)
+/* The reference must survive -ffunction-sections -fdata-sections with --gc-sections (the
+ * Android NDK's defaults): the linker reports no undefined symbol from a section it drops,
+ * and "used" alone does not keep the section. ELF: "retain" where the toolchain has it,
+ * else a constructor (.init_array is always kept). Mach-O: "used" is no_dead_strip. */
+#if defined(__ELF__) && defined(__has_attribute)
+#if __has_attribute(retain)
+#define PICOQUIC_MTU_TAG_RETAIN
+#endif
+#endif
+#if !defined(__ELF__)
+__attribute__((used)) static const int* const picoquic_mtu_tag_ref = &PICOQUIC_MTU_TAG;
+#elif defined(PICOQUIC_MTU_TAG_RETAIN)
+__attribute__((used, retain)) static const int* const picoquic_mtu_tag_ref = &PICOQUIC_MTU_TAG;
+#else
+__attribute__((constructor, used)) static void picoquic_mtu_tag_ref(void) { (void)*(const volatile int*)&PICOQUIC_MTU_TAG; }
+#endif
 #endif
 #define PICOQUIC_CHALLENGE_RESERVE 64 /* amplification budget kept for each challenge repeat */
 #define PICOQUIC_ENFORCED_INITIAL_CID_LENGTH 8
