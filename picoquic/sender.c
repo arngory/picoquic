@@ -3672,12 +3672,15 @@ int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
         uint64_t initial_next_time;
         size_t coalesced_packet_size = 0;
 
+        int segment_count = 0;
+
         picoquic_handle_send_paths(cnx, current_time, &next_wake_time,
             &path_x, &tuple, p_addr_to, p_addr_from, if_index,
             send_buffer_max, send_msg_size);
         initial_next_time = next_wake_time;
 
-        while (ret == 0)
+        /* slipstream: at most 128 segments, the GSO limit of the kernel */
+        while (ret == 0 && segment_count < 128)
         {
             /* Create a new packet, which may include several segments */
             int is_initial_sent = 0;
@@ -3706,7 +3709,7 @@ int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
             }
 
             /* Send the available segments in that packet. */
-            while (ret == 0)
+            while (ret == 0 && segment_count < 128)
             {
                 /* Create the segments that fit in the new packet */
                 size_t available = packet_max;
@@ -3760,6 +3763,7 @@ int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
 
                     if (ret == 0) {
                         coalesced_packet_size += segment_length;
+                        segment_count++;
                         if (packet->length == 0) {
                             /* Nothing more to send */
                             picoquic_recycle_packet(cnx->quic, packet);
@@ -3771,6 +3775,9 @@ int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
                         }
                         else if (segment_length == 0) {
                             DBG_PRINTF("Send bug: segment length = %zu, packet length = %zu\n", segment_length, packet->length);
+                            break;
+                        } else if (segment_count == 128) {
+                            DBG_PRINTF("Reached max segment count, packet length = %zu\n", packet->length);
                             break;
                         }
                     }
