@@ -3434,3 +3434,58 @@ int initial_send_mtu_bounds_test(void)
 
     return ret;
 }
+
+/* slipstream: picoquic_process_ack_range records each acked packet's length in data_acked
+ * once. The ack processing of the POLL frames it carries must not record it again. */
+int poll_ack_count_test(void)
+{
+    uint64_t simulated_time = 0;
+    uint64_t loss_mask = 0;
+    picoquic_test_tls_api_ctx_t* test_ctx = NULL;
+    picoquic_cnx_t* cnx = NULL;
+    picoquic_packet_t* packet = NULL;
+    int ret = tls_api_init_ctx(&test_ctx, PICOQUIC_INTERNAL_TEST_VERSION_1,
+        PICOQUIC_TEST_SNI, PICOQUIC_TEST_ALPN, &simulated_time, NULL, NULL, 0, 0, 0);
+
+    if (ret == 0) {
+        ret = tls_api_connection_loop(test_ctx, &loss_mask, 0, &simulated_time);
+    }
+    if (ret == 0 && ((cnx = test_ctx->cnx_client) == NULL || (packet = picoquic_create_packet(test_ctx->qclient)) == NULL)) {
+        ret = -1;
+    }
+    if (ret == 0) {
+        picoquic_ack_frame_data_t ack_data;
+        uint64_t send_time = simulated_time;
+
+        memset(&ack_data, 0, sizeof(ack_data));
+        ack_data.acked_path = cnx->path[0];
+        /* A 1-RTT packet holding only POLL frames, sent now */
+        packet->ptype = picoquic_packet_1rtt_protected;
+        packet->pc = picoquic_packet_context_application;
+        packet->offset = 10;
+        memset(packet->bytes, 0, 10);
+        packet->bytes[10] = picoquic_frame_type_poll;
+        packet->bytes[11] = picoquic_frame_type_poll;
+        packet->length = 12;
+        packet->send_path = cnx->path[0];
+        packet->send_time = send_time;
+        cnx->path[0]->last_time_acked_data_frame_sent = 0;
+        simulated_time += 10000;
+
+        picoquic_process_ack_of_frames(cnx, packet, &ack_data, 0, simulated_time);
+        if (ack_data.data_acked != 0 || ack_data.is_set) {
+            DBG_PRINTF("POLL frames recorded %" PRIu64 " bytes acked", ack_data.data_acked);
+            ret = -1;
+        }
+        else if (cnx->path[0]->last_time_acked_data_frame_sent == 0) {
+            DBG_PRINTF("%s", "An acked POLL no longer counts as an acked data frame");
+            ret = -1;
+        }
+        packet->send_path = NULL;
+        picoquic_recycle_packet(test_ctx->qclient, packet);
+    }
+    if (test_ctx != NULL) {
+        tls_api_delete_ctx(test_ctx);
+    }
+    return ret;
+}

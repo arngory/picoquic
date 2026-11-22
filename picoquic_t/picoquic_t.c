@@ -583,6 +583,7 @@ static const picoquic_test_def_t test_table[] = {
     { "small_mtu_handshake", small_mtu_handshake_test },
     { "initial_send_mtu_bounds", initial_send_mtu_bounds_test },
     { "path_id_override", path_id_override_test },
+    { "poll_ack_count", poll_ack_count_test },
     { "stream_data_nodes_window", stream_data_nodes_window_test },
     { "stream_data_nodes_limit", stream_data_nodes_limit_test },
     { "direct_receive_duplicate", direct_receive_duplicate_test },

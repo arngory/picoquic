@@ -3774,12 +3774,11 @@ void picoquic_process_ack_of_frames(picoquic_cnx_t* cnx, picoquic_packet_t* p, p
                 byte_index += 1;
                 break;
             case picoquic_frame_type_poll:
-                /* slipstream: an acked poll lets the congestion window grow */
+                /* slipstream: an acked poll lets the congestion window grow. The packet's
+                 * bytes are already in ack_data: picoquic_process_ack_range records each
+                 * acked packet once. */
                 if (p->send_path != NULL && p->send_time > p->send_path->last_time_acked_data_frame_sent) {
                     p->send_path->last_time_acked_data_frame_sent = current_time;
-                }
-                if (ack_data != NULL) {
-                    picoquic_record_ack_packet_data(ack_data, p);
                 }
                 byte_index += 1;
                 break;

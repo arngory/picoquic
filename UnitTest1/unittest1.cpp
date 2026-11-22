@@ -3171,6 +3171,12 @@ namespace UnitTest1
             Assert::AreEqual(ret, 0);
         }
 
+        TEST_METHOD(poll_ack_count) {
+            int ret = poll_ack_count_test();
+
+            Assert::AreEqual(ret, 0);
+        }
+
         TEST_METHOD(stream_data_nodes_window) {
             int ret = stream_data_nodes_window_test();
 
