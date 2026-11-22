@@ -5026,6 +5026,15 @@ const uint8_t* picoquic_decode_path_challenge_frame(picoquic_cnx_t* cnx, const u
                 tuple = tuple->next_tuple;
             }
 
+            if (!is_valid && cnx->is_multipath_enabled && path_x->first_tuple != NULL) {
+                /* slipstream: queries reach the peer through resolvers, from addresses
+                 * that keep changing. With multipath the path ID names the path:
+                 * answer the challenge on the first tuple. */
+                is_valid = 1;
+                path_x->first_tuple->challenge_response = challenge_response;
+                path_x->first_tuple->response_required = 1;
+            }
+
             if (!is_valid) {
                 char buf1[128], buf2[128], buf3[128], buf4[128];
                 picoquic_log_app_message(cnx,
