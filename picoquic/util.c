@@ -32,7 +32,6 @@
 #include <netinet/in.h>
 #include <errno.h>
 #include <pthread.h>
-#include <signal.h>
 #include <unistd.h>
 #endif
 #include "picoquic_internal.h"
@@ -1211,7 +1210,7 @@ void picoquic_delete_thread(picoquic_thread_t * thread)
     *thread = NULL;
 #else
     if (pthread_join(*thread, NULL) != 0) {
-# ifdef _POSIX_THREAD_PROCESS_SHARED
+# ifdef ANDROID
         pthread_kill(*thread, SIGTERM);
 # else
         (void)pthread_cancel(*thread);
