@@ -1899,10 +1899,10 @@ int picoquic_set_first_if_index(picoquic_cnx_t* cnx, unsigned long if_index)
     return ret;
 }
 
-/* slipstream: the initial MTU set by picoquic_set_initial_send_mtu, if any */
-static uint32_t picoquic_initial_send_mtu(picoquic_quic_t* quic, int sa_family)
+/* slipstream: the initial MTU set by picoquic_set_initial_send_mtu, if any.
+ * The callers decide which family counts as IPv4, as upstream does. */
+static uint32_t picoquic_initial_send_mtu(picoquic_quic_t* quic, int is_ipv4)
 {
-    int is_ipv4 = (sa_family == 0 || sa_family == AF_INET);
     uint32_t mtu = (is_ipv4) ? quic->initial_send_mtu_ipv4 : quic->initial_send_mtu_ipv6;
 
     if (mtu == 0) {
@@ -1965,7 +1965,8 @@ int picoquic_create_path(picoquic_cnx_t* cnx, uint64_t start_time, const struct 
                 picoquic_pacing_init(&path_x->pacing, start_time);
 
                 /* Initialize the MTU */
-                path_x->send_mtu = picoquic_initial_send_mtu(cnx->quic, (peer_addr == NULL) ? 0 : peer_addr->sa_family);
+                path_x->send_mtu = picoquic_initial_send_mtu(cnx->quic,
+                    peer_addr == NULL || peer_addr->sa_family == AF_INET);
 
                 /* initialize the quality reporting thresholds */
                 path_x->rtt_update_delta = cnx->rtt_update_delta;
@@ -3086,8 +3087,8 @@ void picoquic_update_peer_addr(picoquic_path_t* path_x, const struct sockaddr* p
 void picoquic_reset_path_mtu(picoquic_path_t* path_x)
 {
     /* Re-initialize the MTU */
-    path_x->send_mtu = picoquic_initial_send_mtu(path_x->cnx->quic,
-        (path_x->first_tuple == NULL) ? 0 : path_x->first_tuple->peer_addr.ss_family);
+    path_x->send_mtu = picoquic_initial_send_mtu(path_x->cnx->quic, path_x->first_tuple == NULL ||
+        path_x->first_tuple->peer_addr.ss_family == 0 || path_x->first_tuple->peer_addr.ss_family == AF_INET);
     /* Reset the MTU discovery context */
     path_x->send_mtu_max_tried = 0;
     path_x->mtu_probe_sent = 0;
