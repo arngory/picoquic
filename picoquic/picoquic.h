@@ -147,6 +147,13 @@ extern "C" {
 #define PICOQUIC_TRANSPORT_NO_CID_AVAILABLE (0x3e77) /* Per draft quic multipath 20 */
 
 #define PICOQUIC_MAX_PACKET_SIZE 1536
+/* slipstream: the most segments in one UDP GSO send (UDP_SEGMENT). Linux refuses more
+ * than UDP_MAX_SEGMENTS with EINVAL: 64 (1 << 6) in the 5.15, 6.1 and 6.6 kernels
+ * (Debian 12, most Android devices), 128 from 6.12. The kernel does not expose the value
+ * to user space (it is not in the uapi headers), so the smaller one is the default. */
+#ifndef PICOQUIC_MAX_GSO_SEGMENTS
+#define PICOQUIC_MAX_GSO_SEGMENTS 64
+#endif
 #define PICOQUIC_INITIAL_MTU_IPV4 1252
 #define PICOQUIC_INITIAL_MTU_IPV6 1232
 #define PICOQUIC_RESET_SECRET_SIZE 16
