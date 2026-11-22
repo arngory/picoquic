@@ -47,9 +47,9 @@ extern "C" {
 #define PICOQUIC_ENFORCED_INITIAL_CID_LENGTH 8
 #define PICOQUIC_PRACTICAL_MAX_MTU 1440
 /* slipstream: a lost stream frame that no longer fits whole is split only if this
- * much room is left. Upstream's 512 is more than a whole packet over DNS (and 32 more
- * than a 64-byte packet holds once the offset takes 4 bytes): the frame
- * was never sent again and the stream stalled. */
+ * much room is left in the packet. Upstream's 512 is more than a whole packet over
+ * DNS: the frame was never sent again and the stream stalled. 32 still stalled with
+ * 64-byte packets once the stream offset reached 16384, where it takes 4 bytes. */
 /* slipstream: out of order stream data may take this many times the free receive
  * window in packet buffers (1536 bytes each) before the connection is closed.
  * Upstream's 6 assumes full packets; a query carries 30 to 120 bytes. */
