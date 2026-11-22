@@ -2643,11 +2643,17 @@ int picoquic_probe_new_tuple(picoquic_cnx_t* cnx, picoquic_path_t* path_x, struc
     return ret;
 }
 
-int picoquic_probe_new_path_ex(picoquic_cnx_t* cnx, const struct sockaddr* addr_peer,
-    const struct sockaddr* addr_local, int if_index, uint64_t current_time, int to_preferred_address)
+/* slipstream: as picoquic_probe_new_path_ex, and path_id_p (if not NULL) receives
+ * the index of the new path, or -1. */
+int picoquic_probe_new_path_id_ex(picoquic_cnx_t* cnx, const struct sockaddr* addr_peer,
+    const struct sockaddr* addr_local, int if_index, uint64_t current_time, int to_preferred_address, int* path_id_p)
 {
     int path_id = -1;
     PICOQUIC_THREAD_CHECK(cnx->quic);
+
+    if (path_id_p != NULL) {
+        *path_id_p = -1;
+    }
 
     if (!cnx->is_multipath_enabled || to_preferred_address) {
         return picoquic_probe_new_tuple(cnx, cnx->path[0], addr_peer, addr_local, if_index, current_time, to_preferred_address);
@@ -2676,6 +2682,10 @@ int picoquic_probe_new_path_ex(picoquic_cnx_t* cnx, const struct sockaddr* addr_
                 picoquic_set_path_challenge(cnx, path_id, current_time);
                 path_x->is_nat_challenge = 0;
                 // path_x->first_tuple->if_index = if_index;
+                /* slipstream: the client keeps the index of each resolver's path */
+                if (path_id_p != NULL) {
+                    *path_id_p = path_id;
+                }
             }
         }
         else {
@@ -2731,6 +2741,12 @@ int picoquic_probe_new_path(picoquic_cnx_t* cnx, const struct sockaddr* addr_pee
     const struct sockaddr* addr_local, uint64_t current_time)
 {
     return picoquic_probe_new_path_ex(cnx, addr_peer, addr_local, 0, current_time, 0);
+}
+
+int picoquic_probe_new_path_ex(picoquic_cnx_t* cnx, const struct sockaddr* addr_peer,
+    const struct sockaddr* addr_local, int if_index, uint64_t current_time, int to_preferred_address)
+{
+    return picoquic_probe_new_path_id_ex(cnx, addr_peer, addr_local, if_index, current_time, to_preferred_address, NULL);
 }
 
 int picoquic_demote_local_cnxid_list(picoquic_cnx_t* cnx, uint64_t unique_path_id,

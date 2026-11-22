@@ -3649,8 +3649,10 @@ void picoquic_handle_send_train_statistics(picoquic_cnx_t* cnx, picoquic_path_t*
     }
 }
 
-/* Prepare next packet to send, or nothing.. */
-int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
+/* Prepare next packet to send, or nothing..
+ * slipstream: path_id_request >= 0 sends on that path (the path of the DNS query
+ * that this packet answers), -1 lets picoquic choose. */
+int picoquic_prepare_packet_path_ex(picoquic_cnx_t* cnx, int path_id_request,
     uint64_t current_time, uint8_t* send_buffer, size_t send_buffer_max, size_t* send_length,
     struct sockaddr_storage * p_addr_to, struct sockaddr_storage * p_addr_from, int* if_index, size_t* send_msg_size)
 {
@@ -3677,6 +3679,15 @@ int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
         picoquic_handle_send_paths(cnx, current_time, &next_wake_time,
             &path_x, &tuple, p_addr_to, p_addr_from, if_index,
             send_buffer_max, send_msg_size);
+        if (path_id_request >= 0 && path_id_request < cnx->nb_paths && cnx->path[path_id_request] != NULL &&
+            cnx->path[path_id_request] != path_x) {
+            path_x = cnx->path[path_id_request];
+            tuple = path_x->first_tuple;
+            picoquic_set_path_addresses_from_tuple(tuple, p_addr_to, p_addr_from, if_index);
+            if (send_msg_size != NULL) {
+                *send_msg_size = path_x->send_mtu;
+            }
+        }
         initial_next_time = next_wake_time;
 
         /* slipstream: at most 128 segments, the GSO limit of the kernel */
@@ -3885,6 +3896,14 @@ int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
     picoquic_reinsert_by_wake_time(cnx->quic, cnx, next_wake_time);
 
     return ret;
+}
+
+int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
+    uint64_t current_time, uint8_t* send_buffer, size_t send_buffer_max, size_t* send_length,
+    struct sockaddr_storage * p_addr_to, struct sockaddr_storage * p_addr_from, int* if_index, size_t* send_msg_size)
+{
+    return picoquic_prepare_packet_path_ex(cnx, -1, current_time, send_buffer, send_buffer_max, send_length,
+        p_addr_to, p_addr_from, if_index, send_msg_size);
 }
 
 int picoquic_prepare_packet(picoquic_cnx_t* cnx,

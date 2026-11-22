@@ -1176,6 +1176,8 @@ int picoquic_probe_new_path(picoquic_cnx_t* cnx, const struct sockaddr* addr_pee
     const struct sockaddr* addr_local, uint64_t current_time);
 int picoquic_probe_new_path_ex(picoquic_cnx_t* cnx, const struct sockaddr* addr_peer,
     const struct sockaddr* addr_local, int if_index, uint64_t current_time, int to_preferred_address);
+int picoquic_probe_new_path_id_ex(picoquic_cnx_t* cnx, const struct sockaddr* addr_peer,
+    const struct sockaddr* addr_local, int if_index, uint64_t current_time, int to_preferred_address, int* path_id_p);
 int picoquic_probe_new_tuple(picoquic_cnx_t* cnx, picoquic_path_t* path_x, struct sockaddr const* addr_peer,
     struct sockaddr const* addr_local, int if_index, uint64_t current_time, int to_preferred_address);
 void picoquic_enable_path_callbacks(picoquic_cnx_t* cnx, int are_enabled);
@@ -1400,6 +1402,17 @@ int picoquic_incoming_packet_ex(
     unsigned char received_ecn,
     picoquic_cnx_t** first_cnx,
     uint64_t current_time);
+int picoquic_incoming_packet_path_ex(
+    picoquic_quic_t* quic,
+    uint8_t* bytes,
+    size_t packet_length,
+    struct sockaddr* addr_from,
+    struct sockaddr* addr_to,
+    int if_index_to,
+    unsigned char received_ecn,
+    picoquic_cnx_t** first_cnx,
+    int* first_path_id,
+    uint64_t current_time);
 
 /* Applications must regularly poll the "next packet" API to obtain the
  * next packet that will be set over the network. The API for that is
@@ -1421,6 +1434,10 @@ int picoquic_prepare_next_packet(picoquic_quic_t* quic,
     picoquic_connection_id_t* p_logcid, picoquic_cnx_t** p_last_cnx);
 
 int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
+    uint64_t current_time, uint8_t* send_buffer, size_t send_buffer_max, size_t* send_length,
+    struct sockaddr_storage* p_addr_to, struct sockaddr_storage* p_addr_from, int* if_index,
+    size_t* send_msg_size);
+int picoquic_prepare_packet_path_ex(picoquic_cnx_t* cnx, int path_id_request,
     uint64_t current_time, uint8_t* send_buffer, size_t send_buffer_max, size_t* send_length,
     struct sockaddr_storage* p_addr_to, struct sockaddr_storage* p_addr_from, int* if_index,
     size_t* send_msg_size);
