@@ -2704,15 +2704,17 @@ int stream_data_nodes_attack_test(void)
         ret = -1;
     }
     if (ret == 0) {
-        /* Smallest count above 128 such that count * 1536 > window * 6 */
+        /* Smallest count above 128 such that count * 1536 > window * PICOQUIC_REORDER_MEMORY_FACTOR */
         picoquic_set_callback(cnx, stream_data_nodes_noop_callback, NULL);
-        nb_trigger = ((cnx->maxdata_local - cnx->data_received) * 6) / 1536 + 1;
+        nb_trigger = ((cnx->maxdata_local - cnx->data_received) * PICOQUIC_REORDER_MEMORY_FACTOR) / 1536 + 1;
         if (nb_trigger < 129) {
             nb_trigger = 129;
         }
     }
 
-    for (uint64_t stream_id = 0; ret == 0 && !is_closed && stream_id < 4 * 100; stream_id += 4) {
+    /* 200 nodes per stream, on as many streams as the trigger needs (the factor of the fork is
+     * larger than upstream's 6) */
+    for (uint64_t stream_id = 0; ret == 0 && !is_closed && stream_id < 4 * (nb_trigger / 200 + 2); stream_id += 4) {
         for (uint64_t offset = 1; ret == 0 && !is_closed && offset < 400; offset += 2) {
             (void)stream_data_nodes_decode_byte(cnx, stream_id, offset, simulated_time);
             if (cnx->cnx_state > picoquic_state_ready) {
@@ -2893,14 +2895,14 @@ int direct_receive_duplicate_test(void)
         ret = -1;
     }
     if (ret == 0) {
-        nb_trigger = ((cnx->maxdata_local - cnx->data_received) * 6) / 1536 + 1;
+        nb_trigger = ((cnx->maxdata_local - cnx->data_received) * PICOQUIC_REORDER_MEMORY_FACTOR) / 1536 + 1;
         if (nb_trigger < 129) {
             nb_trigger = 129;
         }
     }
 
     /* One byte fragments spread over many streams, 200 per stream, must still trip the connection check. */
-    for (uint64_t stream_id = 8; ret == 0 && !is_closed && stream_id < 8 + 4 * 100; stream_id += 4) {
+    for (uint64_t stream_id = 8; ret == 0 && !is_closed && stream_id < 8 + 4 * (nb_trigger / 200 + 2); stream_id += 4) {
         for (uint64_t offset = 1; ret == 0 && !is_closed && offset < 400; offset += 2) {
             (void)stream_data_nodes_decode_byte(cnx, stream_id, offset, simulated_time);
             if (cnx->cnx_state > picoquic_state_ready) {
@@ -2926,7 +2928,7 @@ int direct_receive_duplicate_test(void)
 
 /* Issue 2333: in order data grows the stream window far past the max_data limit, then one byte
  * fragments at odd offsets. The connection wide check must still close the connection once the
- * node count exceeds 6 times the connection window, which the limit bounds. */
+ * node count exceeds PICOQUIC_REORDER_MEMORY_FACTOR times the connection window, which the limit bounds. */
 #define STREAM_DATA_NODES_LIMIT 0x40000
 
 int stream_data_nodes_limit_test(void)
@@ -2986,12 +2988,12 @@ int stream_data_nodes_limit_test(void)
     }
 
     if (ret == 0) {
-        nb_trigger = ((cnx->maxdata_local - cnx->data_received) * 6) / 1536 + 1;
+        nb_trigger = ((cnx->maxdata_local - cnx->data_received) * PICOQUIC_REORDER_MEMORY_FACTOR) / 1536 + 1;
         if (nb_trigger < 129) {
             nb_trigger = 129;
         }
-        stream_trigger = ((stream->maxdata_local - stream->consumed_offset) * 6) / 1536 + 1;
-        if (nb_trigger > (STREAM_DATA_NODES_LIMIT * 6) / 1536 + 1 || stream_trigger <= nb_trigger) {
+        stream_trigger = ((stream->maxdata_local - stream->consumed_offset) * PICOQUIC_REORDER_MEMORY_FACTOR) / 1536 + 1;
+        if (nb_trigger > (STREAM_DATA_NODES_LIMIT * PICOQUIC_REORDER_MEMORY_FACTOR) / 1536 + 1 || stream_trigger <= nb_trigger) {
             DBG_PRINTF("Connection trigger %" PRIu64 ", stream trigger %" PRIu64, nb_trigger, stream_trigger);
             ret = -1;
         }
