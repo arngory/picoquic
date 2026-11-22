@@ -24,7 +24,6 @@
 #include "tls_api.h"
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 
 /* Packet loss recovery logic. This is an implementation of the RACK
  * algorithm, with two key functions:
