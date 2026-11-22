@@ -27,6 +27,7 @@
 #include "picoquictest_internal.h"
 #include "tls_api.h"
 #include "picoquic_qlog.h"
+#include "picoquic_config.h"
 
 
 /* This file includes a series of tests covering edge cases, typically
@@ -3267,5 +3268,94 @@ int vn_bounds_test(void)
     if (test_ctx != NULL) {
         tls_api_delete_ctx(test_ctx);
     }
+    return ret;
+}
+
+/* slipstream: picoquic_set_initial_send_mtu takes 0 (upstream's value) or a value in
+ * [PICOQUIC_ENFORCED_INITIAL_MTU, PICOQUIC_MAX_PACKET_SIZE], and nothing else:
+ * below about 58 bytes the client's Initial padding was a negative memset, up to the
+ * enforced MTU the connection never started, and above the packet buffers it overflowed. */
+int initial_send_mtu_bounds_test(void)
+{
+    uint64_t simulated_time = 0;
+    picoquic_test_tls_api_ctx_t* test_ctx = NULL;
+    int ret = tls_api_init_ctx(&test_ctx, PICOQUIC_INTERNAL_TEST_VERSION_1,
+        PICOQUIC_TEST_SNI, PICOQUIC_TEST_ALPN, &simulated_time, NULL, NULL, 0, 1, 0);
+    const struct {
+        uint32_t v4;
+        uint32_t v6;
+        int expected;
+    } cases[] = {
+        { 0, 0, 0 },
+        { 34, 34, PICOQUIC_ERROR_INITIAL_TOO_SHORT },
+        { 58, 58, PICOQUIC_ERROR_INITIAL_TOO_SHORT },
+        { 59, 59, PICOQUIC_ERROR_INITIAL_TOO_SHORT },
+        { PICOQUIC_ENFORCED_INITIAL_MTU - 1, PICOQUIC_ENFORCED_INITIAL_MTU - 1, PICOQUIC_ERROR_INITIAL_TOO_SHORT },
+        { PICOQUIC_ENFORCED_INITIAL_MTU, PICOQUIC_ENFORCED_INITIAL_MTU, 0 },
+        { PICOQUIC_ENFORCED_INITIAL_MTU, 1, PICOQUIC_ERROR_INITIAL_TOO_SHORT },
+        { 900, 0, 0 },
+        { PICOQUIC_MAX_PACKET_SIZE, PICOQUIC_MAX_PACKET_SIZE, 0 },
+        { PICOQUIC_MAX_PACKET_SIZE + 1, 900, PICOQUIC_ERROR_PACKET_TOO_BIG },
+        { 900, PICOQUIC_MAX_PACKET_SIZE + 1, PICOQUIC_ERROR_PACKET_TOO_BIG },
+        { 0xffffffff, 0xffffffff, PICOQUIC_ERROR_PACKET_TOO_BIG }
+    };
+
+    for (size_t i = 0; ret == 0 && i < sizeof(cases) / sizeof(cases[0]); i++) {
+        uint32_t old_v4 = 1000 + (uint32_t)i;
+        uint32_t old_v6 = 1100 + (uint32_t)i;
+        int r;
+
+        test_ctx->qclient->initial_send_mtu_ipv4 = old_v4;
+        test_ctx->qclient->initial_send_mtu_ipv6 = old_v6;
+        r = picoquic_set_initial_send_mtu(test_ctx->qclient, cases[i].v4, cases[i].v6);
+        if (r != cases[i].expected) {
+            DBG_PRINTF("MTU %u/%u: returns 0x%x, expected 0x%x", cases[i].v4, cases[i].v6, r, cases[i].expected);
+            ret = -1;
+        }
+        else if (r == 0 && (test_ctx->qclient->initial_send_mtu_ipv4 != cases[i].v4 ||
+            test_ctx->qclient->initial_send_mtu_ipv6 != cases[i].v6)) {
+            DBG_PRINTF("MTU %u/%u accepted but not set", cases[i].v4, cases[i].v6);
+            ret = -1;
+        }
+        else if (r != 0 && (test_ctx->qclient->initial_send_mtu_ipv4 != old_v4 ||
+            test_ctx->qclient->initial_send_mtu_ipv6 != old_v6)) {
+            DBG_PRINTF("MTU %u/%u refused but changed", cases[i].v4, cases[i].v6);
+            ret = -1;
+        }
+    }
+    if (test_ctx != NULL) {
+        tls_api_delete_ctx(test_ctx);
+    }
+
+    /* Through the configuration, an MTU out of bounds makes the context creation fail */
+    if (ret == 0) {
+        picoquic_quic_config_t config;
+        picoquic_quic_t* quic;
+
+        picoquic_config_init(&config);
+        config.initial_send_mtu_ipv4 = PICOQUIC_ENFORCED_INITIAL_MTU - 1;
+        config.initial_send_mtu_ipv6 = PICOQUIC_ENFORCED_INITIAL_MTU - 1;
+        if ((quic = picoquic_create_and_configure(&config, NULL, NULL, simulated_time, &simulated_time)) != NULL) {
+            DBG_PRINTF("%s", "Context created with an initial MTU below the enforced MTU");
+            picoquic_free(quic);
+            ret = -1;
+        }
+        config.initial_send_mtu_ipv4 = PICOQUIC_ENFORCED_INITIAL_MTU;
+        config.initial_send_mtu_ipv6 = PICOQUIC_ENFORCED_INITIAL_MTU;
+        if (ret == 0) {
+            if ((quic = picoquic_create_and_configure(&config, NULL, NULL, simulated_time, &simulated_time)) == NULL) {
+                DBG_PRINTF("%s", "Context not created with an initial MTU at the enforced MTU");
+                ret = -1;
+            }
+            else {
+                if (quic->initial_send_mtu_ipv4 != PICOQUIC_ENFORCED_INITIAL_MTU) {
+                    ret = -1;
+                }
+                picoquic_free(quic);
+            }
+        }
+        picoquic_config_clear(&config);
+    }
+
     return ret;
 }

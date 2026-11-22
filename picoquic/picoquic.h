@@ -976,7 +976,16 @@ uint64_t picoquic_get_default_connection_id_ttl(picoquic_quic_t* quic);
 #define PICOQUIC_MTU_OVERHEAD(p_s_addr) (((p_s_addr)->sa_family==AF_INET6)?48:28)
 void picoquic_set_mtu_max(picoquic_quic_t* quic, uint32_t mtu_max);
 
-void picoquic_set_initial_send_mtu(picoquic_quic_t* quic, uint32_t intitial_mtu_ipv4, uint32_t intitial_mtu_ipv6);
+/* slipstream: the UDP payload size of the first packets of each new path, IPv4 and IPv6
+ * (upstream: PICOQUIC_INITIAL_MTU_IPV4 and _IPV6). 0 keeps upstream's value for that family.
+ * Any other value must be in [PICOQUIC_ENFORCED_INITIAL_MTU, PICOQUIC_MAX_PACKET_SIZE]:
+ * - below the enforced MTU, a client's Initial is smaller than what servers take (they drop
+ *   it, and the connection never starts), and from about 58 bytes down it is smaller than
+ *   the Initial itself;
+ * - above PICOQUIC_MAX_PACKET_SIZE, packets would not fit in picoquic's packet buffers.
+ * Returns 0, or PICOQUIC_ERROR_INITIAL_TOO_SHORT or PICOQUIC_ERROR_PACKET_TOO_BIG; on an
+ * error neither value is changed. The caller's send buffers must hold the value. */
+int picoquic_set_initial_send_mtu(picoquic_quic_t* quic, uint32_t intitial_mtu_ipv4, uint32_t intitial_mtu_ipv6);
 
 /* Set the ALPN function used to verify incoming ALPN */
 void picoquic_set_alpn_select_fn(picoquic_quic_t* quic, picoquic_alpn_select_fn alpn_select_fn);

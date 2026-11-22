@@ -4674,10 +4674,29 @@ void picoquic_set_mtu_max(picoquic_quic_t* quic, uint32_t mtu_max)
     quic->default_tp.max_packet_size = mtu_max;
 }
 
-void picoquic_set_initial_send_mtu(picoquic_quic_t* quic, uint32_t intitial_mtu_ipv4, uint32_t intitial_mtu_ipv6)
+static int picoquic_check_initial_send_mtu(uint32_t mtu)
 {
-    quic->initial_send_mtu_ipv4 = intitial_mtu_ipv4;
-    quic->initial_send_mtu_ipv6 = intitial_mtu_ipv6;
+    if (mtu != 0 && mtu < PICOQUIC_ENFORCED_INITIAL_MTU) {
+        return PICOQUIC_ERROR_INITIAL_TOO_SHORT;
+    }
+    if (mtu > PICOQUIC_MAX_PACKET_SIZE) {
+        return PICOQUIC_ERROR_PACKET_TOO_BIG;
+    }
+    return 0;
+}
+
+int picoquic_set_initial_send_mtu(picoquic_quic_t* quic, uint32_t intitial_mtu_ipv4, uint32_t intitial_mtu_ipv6)
+{
+    int ret = picoquic_check_initial_send_mtu(intitial_mtu_ipv4);
+
+    if (ret == 0) {
+        ret = picoquic_check_initial_send_mtu(intitial_mtu_ipv6);
+    }
+    if (ret == 0) {
+        quic->initial_send_mtu_ipv4 = intitial_mtu_ipv4;
+        quic->initial_send_mtu_ipv6 = intitial_mtu_ipv6;
+    }
+    return ret;
 }
 
 void picoquic_set_alpn_select_fn(picoquic_quic_t* quic, picoquic_alpn_select_fn alpn_select_fn)
