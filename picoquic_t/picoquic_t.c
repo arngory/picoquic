@@ -579,6 +579,7 @@ static const picoquic_test_def_t test_table[] = {
     { "reset_stream_at_loss", reset_stream_at_loss_test },
     { "stream_data_nodes", stream_data_nodes_test },
     { "stream_data_nodes_attack", stream_data_nodes_attack_test },
+    { "vn_bounds", vn_bounds_test },
     { "stream_data_nodes_window", stream_data_nodes_window_test },
     { "stream_data_nodes_limit", stream_data_nodes_limit_test },
     { "direct_receive_duplicate", direct_receive_duplicate_test },

@@ -999,8 +999,13 @@ int picoquic_incoming_version_negotiation(
 
 /*
  * Send a version negotiation packet in response to an incoming packet
- * sporting the wrong version number. This assumes that the original packet
- * is at least 517 bytes long.
+ * sporting the wrong version number.
+ * slipstream: the header of an unknown version is not parsed past the version,
+ * so both connection ID lengths (up to 255 each) are checked here against the
+ * bytes left in the datagram. Upstream relied on its 1200-byte floor, which
+ * holds the 517 bytes the two IDs can take; the fork's floor (64) does not.
+ * A client-only context never answers with a version negotiation (RFC 9000,
+ * 6: only servers send them).
  */
 
 void picoquic_prepare_version_negotiation(
@@ -1009,13 +1014,23 @@ void picoquic_prepare_version_negotiation(
     struct sockaddr* addr_to,
     unsigned long if_index_to,
     picoquic_packet_header* ph,
-    uint8_t* original_bytes)
+    uint8_t* original_bytes,
+    size_t length)
 {
     picoquic_cnx_t* cnx = NULL;
-    uint8_t dcid_length = original_bytes[5];
-    uint8_t * dcid = original_bytes + 6;
-    uint8_t scid_length = original_bytes[6 + dcid_length];
-    uint8_t* scid = original_bytes + 6 + dcid_length + 1;
+    uint8_t dcid_length;
+    uint8_t * dcid;
+    uint8_t scid_length;
+    uint8_t* scid;
+
+    if (quic->enforce_client_only || length < 7 || length < 7 + (size_t)original_bytes[5] ||
+        length < 7 + (size_t)original_bytes[5] + (size_t)original_bytes[6 + original_bytes[5]]) {
+        return;
+    }
+    dcid_length = original_bytes[5];
+    dcid = original_bytes + 6;
+    scid_length = original_bytes[6 + dcid_length];
+    scid = original_bytes + 6 + dcid_length + 1;
 
     /* Verify that this is not a spurious error by checking whether a connection context
      * already exists */
@@ -2244,7 +2259,7 @@ int picoquic_incoming_segment(
         * but block reflection attacks towards protected ports. */
         if (packet_length >= PICOQUIC_ENFORCED_INITIAL_MTU){
             if (quic->is_port_blocking_disabled || !picoquic_check_addr_blocked(addr_from)) {
-                picoquic_prepare_version_negotiation(quic, addr_from, addr_to, if_index_to, &ph, raw_bytes);
+                picoquic_prepare_version_negotiation(quic, addr_from, addr_to, if_index_to, &ph, raw_bytes, length);
             }
         }
     } else if (ret == PICOQUIC_ERROR_RETRY_NEEDED) {

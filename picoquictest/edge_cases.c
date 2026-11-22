@@ -3161,3 +3161,111 @@ int reset_after_fin_received_test(void)
     }
     return ret;
 }
+
+/* slipstream: a datagram of an unknown version, with connection ID lengths that do not fit
+ * in it, must not make the server read past the datagram to build a version negotiation
+ * (the fork's floor of 64 bytes no longer covers the 517 bytes the two IDs can take).
+ * Each datagram is a malloc of its exact size, so that ASan sees any read past it.
+ * A client-only context must not build a version negotiation at all; a server still
+ * answers an unknown version whose IDs fit. Returns the number of queued packets. */
+static int vn_bounds_one(picoquic_quic_t* quic, size_t length, uint8_t dcid_length, uint8_t scid_length,
+    struct sockaddr* addr_from, struct sockaddr* addr_to, uint64_t current_time, int* nb_queued)
+{
+    int ret = 0;
+    uint8_t* bytes = (uint8_t*)malloc(length);
+    picoquic_stateless_packet_t* sp;
+
+    *nb_queued = 0;
+    if (bytes == NULL) {
+        return -1;
+    }
+    memset(bytes, 0x55, length);
+    bytes[0] = 0xc0;
+    picoformat_32(bytes + 1, 0x1a2a3a4a); /* not a version of picoquic */
+    bytes[5] = dcid_length;
+    if (6 + (size_t)dcid_length < length) {
+        bytes[6 + dcid_length] = scid_length;
+    }
+    (void)picoquic_incoming_packet(quic, bytes, length, addr_from, addr_to, 0, 0, current_time);
+    while ((sp = picoquic_dequeue_stateless_packet(quic)) != NULL) {
+        if (sp->length > 7 + (size_t)dcid_length + (size_t)scid_length + 4 * (picoquic_nb_supported_versions + 1)) {
+            DBG_PRINTF("Stateless packet of %zu bytes for a %zu-byte datagram", sp->length, length);
+            ret = -1;
+        }
+        (*nb_queued)++;
+        picoquic_delete_stateless_packet(sp);
+    }
+    free(bytes);
+    return ret;
+}
+
+int vn_bounds_test(void)
+{
+    uint64_t simulated_time = 0;
+    picoquic_test_tls_api_ctx_t* test_ctx = NULL;
+    int nb_queued = 0;
+    int ret = tls_api_init_ctx(&test_ctx, PICOQUIC_INTERNAL_TEST_VERSION_1,
+        PICOQUIC_TEST_SNI, PICOQUIC_TEST_ALPN, &simulated_time, NULL, NULL, 0, 1, 0);
+
+    if (ret == 0 && (!test_ctx->qclient->enforce_client_only || test_ctx->qserver->enforce_client_only)) {
+        DBG_PRINTF("%s", "Expected a client-only client context and a server context");
+        ret = -1;
+    }
+    /* IDs that do not fit: nothing queued, nothing read past the datagram, on either side */
+    for (int side = 0; ret == 0 && side < 2; side++) {
+        picoquic_quic_t* quic = (side == 0) ? test_ctx->qserver : test_ctx->qclient;
+        struct sockaddr* addr_from = (struct sockaddr*)((side == 0) ? &test_ctx->client_addr : &test_ctx->server_addr);
+        struct sockaddr* addr_to = (struct sockaddr*)((side == 0) ? &test_ctx->server_addr : &test_ctx->client_addr);
+        const size_t lengths[] = { PICOQUIC_ENFORCED_INITIAL_MTU, 64, 129, 255, 300 };
+        const uint8_t cid_lengths[][2] = { { 255, 255 }, { 255, 0 }, { 8, 255 }, { 0, 255 }, { 200, 100 } };
+
+        quic->is_port_blocking_disabled = 1;
+        for (size_t i = 0; ret == 0 && i < sizeof(lengths) / sizeof(lengths[0]); i++) {
+            for (size_t j = 0; ret == 0 && j < sizeof(cid_lengths) / sizeof(cid_lengths[0]); j++) {
+                if (lengths[i] < PICOQUIC_ENFORCED_INITIAL_MTU ||
+                    7 + (size_t)cid_lengths[j][0] + (size_t)cid_lengths[j][1] <= lengths[i]) {
+                    continue;
+                }
+                ret = vn_bounds_one(quic, lengths[i], cid_lengths[j][0], cid_lengths[j][1], addr_from, addr_to,
+                    simulated_time, &nb_queued);
+                if (ret == 0 && nb_queued != 0) {
+                    DBG_PRINTF("Side %d, %zu bytes, CIDs %d/%d: %d packets queued", side, lengths[i],
+                        cid_lengths[j][0], cid_lengths[j][1], nb_queued);
+                    ret = -1;
+                }
+            }
+        }
+    }
+    /* IDs that fit: the server answers, the client-only context does not */
+    for (int side = 0; ret == 0 && side < 2; side++) {
+        picoquic_quic_t* quic = (side == 0) ? test_ctx->qserver : test_ctx->qclient;
+        struct sockaddr* addr_from = (struct sockaddr*)((side == 0) ? &test_ctx->client_addr : &test_ctx->server_addr);
+        struct sockaddr* addr_to = (struct sockaddr*)((side == 0) ? &test_ctx->server_addr : &test_ctx->client_addr);
+        const size_t lengths[] = { 64, 129 };
+
+        for (size_t i = 0; ret == 0 && i < sizeof(lengths) / sizeof(lengths[0]); i++) {
+            if (lengths[i] < PICOQUIC_ENFORCED_INITIAL_MTU) {
+                continue;
+            }
+            ret = vn_bounds_one(quic, lengths[i], 8, 8, addr_from, addr_to, simulated_time, &nb_queued);
+            if (ret == 0 && nb_queued != ((side == 0) ? 1 : 0)) {
+                DBG_PRINTF("Side %d, %zu bytes, CIDs 8/8: %d packets queued", side, lengths[i], nb_queued);
+                ret = -1;
+            }
+        }
+    }
+    /* At the exact fit, a CID length of 255 each: 517 bytes */
+    if (ret == 0) {
+        ret = vn_bounds_one(test_ctx->qserver, 517, 255, 255, (struct sockaddr*)&test_ctx->client_addr,
+            (struct sockaddr*)&test_ctx->server_addr, simulated_time, &nb_queued);
+        if (ret == 0 && nb_queued != 1) {
+            DBG_PRINTF("517 bytes, CIDs 255/255: %d packets queued", nb_queued);
+            ret = -1;
+        }
+    }
+
+    if (test_ctx != NULL) {
+        tls_api_delete_ctx(test_ctx);
+    }
+    return ret;
+}

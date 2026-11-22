@@ -440,6 +440,7 @@ int reset_stream_at_limit_test(void);
 int reset_stream_at_loss_test(void);
 int stream_data_nodes_test(void);
 int stream_data_nodes_attack_test(void);
+int vn_bounds_test(void);
 int stream_data_nodes_window_test(void);
 int stream_data_nodes_limit_test(void);
 int direct_receive_duplicate_test(void);

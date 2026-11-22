@@ -3147,6 +3147,12 @@ namespace UnitTest1
             Assert::AreEqual(ret, 0);
         }
 
+        TEST_METHOD(vn_bounds) {
+            int ret = vn_bounds_test();
+
+            Assert::AreEqual(ret, 0);
+        }
+
         TEST_METHOD(stream_data_nodes_window) {
             int ret = stream_data_nodes_window_test();
 
