@@ -475,7 +475,6 @@ endif ()
 # set_picoquic_compile_settings(TARGET) makes is easy to consistently
 # assign compiler build options to each of the following targets
 macro(set_picoquic_compile_settings)
-    message(STATUS "PICOQUIC_ADDITIONAL_C_FLAGS in picoquic: ${PICOQUIC_ADDITIONAL_C_FLAGS}")
     set_target_properties(${ARGV0}
         PROPERTIES
             C_STANDARD 11
