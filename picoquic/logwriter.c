@@ -588,6 +588,7 @@ static void binlog_compose_frames(bytestream* msg, const uint8_t* bytes, size_t 
             break;
         case picoquic_frame_type_padding:
         case picoquic_frame_type_ping:
+        case picoquic_frame_type_poll:
             bytes = picoquic_log_padding(msg, bytes, bytes_max);
             break;
         case picoquic_frame_type_reset_stream:
