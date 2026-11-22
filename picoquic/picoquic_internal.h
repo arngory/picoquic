@@ -46,7 +46,13 @@ extern "C" {
 #define PICOQUIC_CHALLENGE_RESERVE 64 /* amplification budget kept for each challenge repeat */
 #define PICOQUIC_ENFORCED_INITIAL_CID_LENGTH 8
 #define PICOQUIC_PRACTICAL_MAX_MTU 1440
-#define PICOQUIC_MIN_STREAM_DATA_FRAGMENT 512
+/* slipstream: a lost stream frame that no longer fits whole is split only if this
+ * much room is left. Upstream's 512 is more than a whole packet over DNS (and 32 more
+ * than a 64-byte packet holds once the offset takes 4 bytes): the frame
+ * was never sent again and the stream stalled. */
+#ifndef PICOQUIC_MIN_STREAM_DATA_FRAGMENT
+#define PICOQUIC_MIN_STREAM_DATA_FRAGMENT 8
+#endif
 #define PICOQUIC_RETRY_SECRET_SIZE 64
 #define PICOQUIC_RETRY_TOKEN_PAD_SIZE 26
 #define PICOQUIC_NEW_TOKEN_MAX_LENGTH 512
