@@ -81,8 +81,14 @@ On this tag, the plain upstream tree fails 15 tests in a sandbox without IPv6 (t
 and the fixes of round 3, 163 more fail at the enforced MTU of 64 (now the default), in Release and in a Debug build
 with ASan and UBSan alike, with no sanitizer report. None of them is a regression: each one passes again when the
 value of a deliberate patch is set back (round 2 checked this by building the series with each value reverted in
-turn; round 3 changed the set only by the four tests it fixed: `stateless_reset_handshake`, and the three reorder
-tests, which now check the fork's bound):
+turn; round 3 changed the set only by the three reorder tests, which now check the fork's bound). On another
+machine (4 cores) the same 15 failed on the plain tag and 154 more on the series; the other 9 of the 163 passed there.
+
+`stateless_reset_handshake` fails about one run in six (3 in 20), for patch 2. Its bogus 256-byte packet is a long
+header of an unknown version, with connection ID lengths taken from the random IDs of the test. Upstream, 256 bytes
+are under the 1200 that a Version Negotiation needs; at 64 the server builds one whenever both IDs lie inside the
+packet (the DCID length is at most 45, about 18% of draws), and the test, which expects no stateless packet, fails.
+The VN is right (B1, below), so the test is left as is.
 
 | Cause | Tests | Why |
 |---|---|---|
