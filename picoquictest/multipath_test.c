@@ -3288,7 +3288,7 @@ int multipath_flow_frames_ack_test(void)
         }
         else {
             memset(bytes, 0, bytes_max - bytes);
-            picoquic_process_ack_of_frames(cnx, packet, 0);
+            picoquic_process_ack_of_frames(cnx, packet, NULL, 0, 0);
             stash = picoquic_find_or_create_remote_cnxid_stash(cnx, 0, 0);
 
             if (stash == NULL || stash->cnxid_stash_first == NULL ||

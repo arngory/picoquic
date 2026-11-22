@@ -65,13 +65,13 @@ extern "C" {
 #define PICOQUIC_INITIAL_MAX_RETRANSMIT_TIMER 1000000ull /* one second */
 #define PICOQUIC_LARGE_RETRANSMIT_TIMER 2000000ull /* two seconds */
 #define PICOQUIC_MIN_RETRANSMIT_TIMER 50000ull /* 50 ms */
-#define PICOQUIC_ACK_DELAY_MAX 10000ull /* 10 ms */
+#define PICOQUIC_ACK_DELAY_MAX 100000ull /* 10 ms */
 #define PICOQUIC_ACK_DELAY_MAX_DEFAULT 25000ull /* 25 ms, per protocol spec */
 #define PICOQUIC_ACK_DELAY_MIN 1000ull /* 1 ms */
 #define PICOQUIC_TIMER_GRANULARITY 1000ull /* 1 ms, kGranularity in RFC 9002 */
 #define PICOQUIC_PERSISTENT_CONGESTION_THRESHOLD 3 /* kPersistentCongestionThreshold in RFC 9002 */
 #define PICOQUIC_ACK_DELAY_MIN_MAX_VALUE 0xFFFFFFull /* max value that can be negotiated by peers */
-#define PICOQUIC_RACK_DELAY 10000 /* 10 ms */
+#define PICOQUIC_RACK_DELAY 300000 /* slipstream: 300 ms (upstream 10 ms) */
 #define PICOQUIC_MAX_ACK_DELAY_MAX_MS 0x4000ull /* 2<14 ms */
 #define PICOQUIC_TOKEN_DELAY_LONG (24*60*60*1000000ull) /* 24 hours */
 #define PICOQUIC_TOKEN_DELAY_SHORT (2*60*1000000ull) /* 2 minutes */
@@ -1352,6 +1352,9 @@ typedef struct st_picoquic_cnx_t {
     /* Requesting polls */
     unsigned int is_poll_requested : 1; /* Whether the application requested to poll */
 
+    /* Disable ack delay */
+    unsigned int no_ack_delay : 1; /* Whether the ack delay is disabled, no impact on transport parameters */
+
     /* PMTUD policy */
     picoquic_pmtud_policy_enum pmtud_policy;
     /* Spin bit policy */
@@ -2104,8 +2107,8 @@ void picoquic_set_ack_needed(picoquic_cnx_t* cnx, uint64_t current_time, picoqui
 /* If the packet contained an ACK frame, perform the ACK of ACK pruning logic.
  * Record stream data as acknowledged, signal datagram frames as acknowledged.
  */
-void picoquic_process_ack_of_frames(picoquic_cnx_t* cnx, picoquic_packet_t* p,
-    int is_spurious);
+void picoquic_process_ack_of_frames(picoquic_cnx_t* cnx, picoquic_packet_t* p, picoquic_ack_frame_data_t* ack_data,
+    int is_spurious, uint64_t current_time);
 
 /* Coding and decoding of frames */
 typedef struct st_picoquic_stream_data_buffer_argument_t {

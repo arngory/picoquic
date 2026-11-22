@@ -2692,7 +2692,7 @@ picoquic_packet_t* picoquic_check_spurious_retransmission(picoquic_cnx_t* cnx,
             /* If the packet contained an ACK frame, perform the ACK of ACK pruning logic.
              * Record stream data as acknowledged, signal datagram frames as acknowledged.
              */
-            picoquic_process_ack_of_frames(cnx, p, 1);
+            picoquic_process_ack_of_frames(cnx, p, ack_data, 1, current_time);
 
 
             /* Update congestion control and statistics */
@@ -3728,8 +3728,8 @@ int picoquic_process_ack_of_stream_frame(picoquic_cnx_t* cnx, uint8_t* bytes,
 /* If the packet contained an ACK frame, perform the ACK of ACK pruning logic.
  * Record stream data as acknowledged, signal datagram frames as acknowledged.
  */
-void picoquic_process_ack_of_frames(picoquic_cnx_t* cnx, picoquic_packet_t* p, 
-    int is_spurious)
+void picoquic_process_ack_of_frames(picoquic_cnx_t* cnx, picoquic_packet_t* p, picoquic_ack_frame_data_t* ack_data,
+    int is_spurious, uint64_t current_time)
 {
     int ret = 0;
     size_t byte_index;
@@ -3771,6 +3771,16 @@ void picoquic_process_ack_of_frames(picoquic_cnx_t* cnx, picoquic_packet_t* p,
                 break;
             case picoquic_frame_type_handshake_done:
                 cnx->is_handshake_done_acked = 1;
+                byte_index += 1;
+                break;
+            case picoquic_frame_type_poll:
+                /* slipstream: an acked poll lets the congestion window grow */
+                if (p->send_path != NULL && p->send_time > p->send_path->last_time_acked_data_frame_sent) {
+                    p->send_path->last_time_acked_data_frame_sent = current_time;
+                }
+                if (ack_data != NULL) {
+                    picoquic_record_ack_packet_data(ack_data, p);
+                }
                 byte_index += 1;
                 break;
             case picoquic_frame_type_new_connection_id:
@@ -3928,7 +3938,7 @@ static int picoquic_process_ack_range(
                 /* If the packet contained an ACK frame, perform the ACK of ACK pruning logic.
                  * Record stream data as acknowledged, signal datagram frames as acknowledged.
                  */
-                picoquic_process_ack_of_frames(cnx, p, 0);
+                picoquic_process_ack_of_frames(cnx, p, ack_data, 0, current_time);
 
                 /* Keep track of reception of ACK of 1RTT data */
                 if (p->ptype == picoquic_packet_1rtt_protected &&
@@ -4057,7 +4067,8 @@ const uint8_t* picoquic_decode_ack_frame(picoquic_cnx_t* cnx, const uint8_t* byt
                     break;
                 }
 
-                if (range > 0) {
+                // disable spurious retransmission detection for 1-RTT packets
+                if (cnx->cnx_state != picoquic_state_ready && range > 0) {
                     p_retransmitted_previous = picoquic_check_spurious_retransmission(cnx, pc, pkt_ctx,
                         largest + 1 - range, largest, current_time, p_retransmitted_previous, &ack_data);
                 }
@@ -4390,7 +4401,10 @@ int picoquic_is_ack_needed_in_ctx(picoquic_cnx_t* cnx, picoquic_ack_context_t* a
     int ret = 0;
 
     if (ack_ctx->act[is_opportunistic].ack_needed) {
-        if (ack_ctx->act[is_opportunistic].is_immediate_ack_required) {
+        if (cnx->no_ack_delay) {
+            ret = 1;
+        }
+        else if (ack_ctx->act[is_opportunistic].is_immediate_ack_required) {
             ret = 1;
         }
         else if (pc != picoquic_packet_context_application || ack_ctx->act[is_opportunistic].ack_after_fin) {
