@@ -35,12 +35,72 @@ extern "C" {
 #ifndef PICOQUIC_MAX_PACKET_SIZE
 #define PICOQUIC_MAX_PACKET_SIZE 1536
 #endif
-#define PICOQUIC_MIN_SEGMENT_SIZE 256
-#define PICOQUIC_ENFORCED_INITIAL_MTU 1200
+/* slipstream: QUIC over DNS carries packets far below the 1200 bytes of RFC 9000.
+ * Both values can be set at build time (-DPICOQUIC_ENFORCED_INITIAL_MTU=64).
+ * PICOQUIC_ENFORCED_INITIAL_MTU is the smallest Initial datagram a server takes and a
+ * client sends. It is a protocol constant between the two peers: slipstream uses 64 on
+ * both sides, the default here and in CMakeLists.txt. */
+#ifndef PICOQUIC_MIN_SEGMENT_SIZE
+#define PICOQUIC_MIN_SEGMENT_SIZE 32
+#endif
+#ifndef PICOQUIC_ENFORCED_INITIAL_MTU
+#define PICOQUIC_ENFORCED_INITIAL_MTU 64
+#endif
+/* Below 64, a client Initial does not fit (the padding to the floor went negative, and a
+ * test buffer of the floor's size minus 52 underflows); 1200 is RFC 9000's floor. */
+#if PICOQUIC_ENFORCED_INITIAL_MTU < 64 || PICOQUIC_ENFORCED_INITIAL_MTU > 1200
+#error "PICOQUIC_ENFORCED_INITIAL_MTU must be in [64, 1200]"
+#endif
+/* Every file that includes this header references a symbol named after the value of
+ * PICOQUIC_ENFORCED_INITIAL_MTU, which quicctx.c defines. Code built with another value
+ * than the library then fails to link, for example with "undefined reference to
+ * picoquic_built_with_enforced_initial_mtu_129", instead of running with two floors. */
+#define PICOQUIC_MTU_TAG_CAT2(a, b) a##b
+#define PICOQUIC_MTU_TAG_CAT(a, b) PICOQUIC_MTU_TAG_CAT2(a, b)
+#define PICOQUIC_MTU_TAG_STR2(a) #a
+#define PICOQUIC_MTU_TAG_STR(a) PICOQUIC_MTU_TAG_STR2(a)
+#define PICOQUIC_MTU_TAG PICOQUIC_MTU_TAG_CAT(picoquic_built_with_enforced_initial_mtu_, PICOQUIC_ENFORCED_INITIAL_MTU)
+extern const int PICOQUIC_MTU_TAG;
+#if defined(_MSC_VER)
+#if defined(_M_IX86)
+#pragma comment(linker, "/include:_" PICOQUIC_MTU_TAG_STR(PICOQUIC_MTU_TAG))
+#else
+#pragma comment(linker, "/include:" PICOQUIC_MTU_TAG_STR(PICOQUIC_MTU_TAG))
+#endif
+#elif defined(__GNUC__) || defined(__clang__)
+/* The reference must survive -ffunction-sections -fdata-sections with --gc-sections (the
+ * Android NDK's defaults): the linker reports no undefined symbol from a section it drops,
+ * and "used" alone does not keep the section. ELF: "retain" where the toolchain has it,
+ * else a constructor (.init_array is always kept). Mach-O: "used" is no_dead_strip. */
+#if defined(__ELF__) && defined(__has_attribute)
+#if __has_attribute(retain)
+#define PICOQUIC_MTU_TAG_RETAIN
+#endif
+#endif
+#if !defined(__ELF__)
+__attribute__((used)) static const int* const picoquic_mtu_tag_ref = &PICOQUIC_MTU_TAG;
+#elif defined(PICOQUIC_MTU_TAG_RETAIN)
+__attribute__((used, retain)) static const int* const picoquic_mtu_tag_ref = &PICOQUIC_MTU_TAG;
+#else
+__attribute__((constructor, used)) static void picoquic_mtu_tag_ref(void) { (void)*(const volatile int*)&PICOQUIC_MTU_TAG; }
+#endif
+#endif
 #define PICOQUIC_CHALLENGE_RESERVE 64 /* amplification budget kept for each challenge repeat */
 #define PICOQUIC_ENFORCED_INITIAL_CID_LENGTH 8
 #define PICOQUIC_PRACTICAL_MAX_MTU 1440
-#define PICOQUIC_MIN_STREAM_DATA_FRAGMENT 512
+/* slipstream: a lost stream frame that no longer fits whole is split only if this
+ * much room is left in the packet. Upstream's 512 is more than a whole packet over
+ * DNS: the frame was never sent again and the stream stalled. 32 still stalled with
+ * 64-byte packets once the stream offset reached 16384, where it takes 4 bytes. */
+#ifndef PICOQUIC_MIN_STREAM_DATA_FRAGMENT
+#define PICOQUIC_MIN_STREAM_DATA_FRAGMENT 8
+#endif
+/* slipstream: out of order stream data may take this many times the free receive
+ * window in packet buffers (1536 bytes each) before the connection is closed.
+ * Upstream's 6 assumes full packets; a query carries 30 to 120 bytes. */
+#ifndef PICOQUIC_REORDER_MEMORY_FACTOR
+#define PICOQUIC_REORDER_MEMORY_FACTOR 64
+#endif
 #define PICOQUIC_RETRY_SECRET_SIZE 64
 #define PICOQUIC_RETRY_TOKEN_PAD_SIZE 26
 #define PICOQUIC_NEW_TOKEN_MAX_LENGTH 512
@@ -59,13 +119,13 @@ extern "C" {
 #define PICOQUIC_INITIAL_MAX_RETRANSMIT_TIMER 1000000ull /* one second */
 #define PICOQUIC_LARGE_RETRANSMIT_TIMER 2000000ull /* two seconds */
 #define PICOQUIC_MIN_RETRANSMIT_TIMER 50000ull /* 50 ms */
-#define PICOQUIC_ACK_DELAY_MAX 10000ull /* 10 ms */
+#define PICOQUIC_ACK_DELAY_MAX 100000ull /* slipstream: 100 ms (upstream 10 ms) */
 #define PICOQUIC_ACK_DELAY_MAX_DEFAULT 25000ull /* 25 ms, per protocol spec */
 #define PICOQUIC_ACK_DELAY_MIN 1000ull /* 1 ms */
 #define PICOQUIC_TIMER_GRANULARITY 1000ull /* 1 ms, kGranularity in RFC 9002 */
 #define PICOQUIC_PERSISTENT_CONGESTION_THRESHOLD 3 /* kPersistentCongestionThreshold in RFC 9002 */
 #define PICOQUIC_ACK_DELAY_MIN_MAX_VALUE 0xFFFFFFull /* max value that can be negotiated by peers */
-#define PICOQUIC_RACK_DELAY 10000 /* 10 ms */
+#define PICOQUIC_RACK_DELAY 300000 /* slipstream: 300 ms (upstream 10 ms) */
 #define PICOQUIC_MAX_ACK_DELAY_MAX_MS 0x4000ull /* 2<14 ms */
 #define PICOQUIC_TOKEN_DELAY_LONG (24*60*60*1000000ull) /* 24 hours */
 #define PICOQUIC_TOKEN_DELAY_SHORT (2*60*1000000ull) /* 2 minutes */
@@ -90,7 +150,9 @@ extern "C" {
 #define PICOQUIC_MICROSEC_STATELESS_RESET_INTERVAL_DEFAULT 100000ull /* max 10 stateless reset by second by default */
 
 #define PICOQUIC_CWIN_INITIAL (10 * PICOQUIC_MAX_PACKET_SIZE)
+#define PICOQUIC_PATH_CWIN_INITIAL (10 * path_x->send_mtu)
 #define PICOQUIC_CWIN_MINIMUM (2 * PICOQUIC_MAX_PACKET_SIZE)
+#define PICOQUIC_PATH_CWIN_MINIMUM (2 * path_x->send_mtu)
 
 #define PICOQUIC_INCOMING_NOT_DECRYPTED_MAX (PICOQUIC_CWIN_INITIAL / PICOQUIC_MAX_PACKET_SIZE) /* peer cannot send more than the initial window before an ACK */
 
@@ -135,6 +197,7 @@ extern "C" {
 typedef enum {
     picoquic_frame_type_padding = 0,
     picoquic_frame_type_ping = 1,
+    picoquic_frame_type_poll = 0x20,
     picoquic_frame_type_ack = 0x02,
     picoquic_frame_type_ack_ecn = 0x03,
     picoquic_frame_type_reset_stream = 0x04,
@@ -552,6 +615,8 @@ typedef struct st_picoquic_quic_t {
     uint8_t default_datagram_priority;
     uint64_t local_cnxid_ttl; /* Max time to live of Connection ID in microsec, init to "forever" */
     uint32_t mtu_max;
+    uint32_t initial_send_mtu_ipv4;
+    uint32_t initial_send_mtu_ipv6;
     uint32_t padding_multiple_default;
     uint32_t padding_minsize_default;
     uint32_t sequence_hole_pseudo_period; /* Optimistic ack defense */
@@ -1338,6 +1403,12 @@ typedef struct st_picoquic_cnx_t {
     unsigned int is_qmux_tls_ready : 1; /* TLS handshake of QMux connection not complete */
     unsigned int is_scone_indicator_sent : 1; /* Keep track, give up on Scone indicator after 1 trial */
 
+    /* Requesting polls */
+    unsigned int is_poll_requested : 1; /* Whether the application requested to poll */
+
+    /* Disable ack delay */
+    unsigned int no_ack_delay : 1; /* Whether the ack delay is disabled, no impact on transport parameters */
+
     /* PMTUD policy */
     picoquic_pmtud_policy_enum pmtud_policy;
     /* Spin bit policy */
@@ -2090,8 +2161,8 @@ void picoquic_set_ack_needed(picoquic_cnx_t* cnx, uint64_t current_time, picoqui
 /* If the packet contained an ACK frame, perform the ACK of ACK pruning logic.
  * Record stream data as acknowledged, signal datagram frames as acknowledged.
  */
-void picoquic_process_ack_of_frames(picoquic_cnx_t* cnx, picoquic_packet_t* p,
-    int is_spurious);
+void picoquic_process_ack_of_frames(picoquic_cnx_t* cnx, picoquic_packet_t* p, picoquic_ack_frame_data_t* ack_data,
+    int is_spurious, uint64_t current_time);
 
 /* Coding and decoding of frames */
 typedef struct st_picoquic_stream_data_buffer_argument_t {

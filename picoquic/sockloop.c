@@ -2917,6 +2917,38 @@ int picoquic_packet_loop_do_udp_send(
     return ret;
 }
 
+#ifndef _WINDOWS
+/* slipstream: see picoquic_packet_loop.h */
+int picoquic_packet_loop_wait_udp(picoquic_socket_ctx_t* s_ctx, int nb_sockets,
+    struct sockaddr_storage* addr_from, struct sockaddr_storage* addr_dest, int* dest_if,
+    unsigned char* received_ecn, uint8_t* buffer, int buffer_max, int64_t delta_t,
+    int* is_wake_up_event, picoquic_network_thread_ctx_t* thread_ctx, int* socket_rank)
+{
+    picoquic_packet_loop_action_enum action = picoquic_packet_loop_action_none;
+    uint64_t current_time = picoquic_current_time();
+    int bytes_recv;
+#if defined(PICOQUIC_WITH_IO_URING)
+    bytes_recv = -1; /* not supported with io_uring */
+#elif defined(PICOQUIC_WITH_POLL)
+    struct pollfd poll_list[PICOQUIC_PACKET_LOOP_SOCKETS_MAX + 1];
+    if (nb_sockets > PICOQUIC_PACKET_LOOP_SOCKETS_MAX) {
+        return -1;
+    }
+    bytes_recv = picoquic_packet_loop_poll(s_ctx, nb_sockets, NULL, 0, current_time,
+        poll_list, (size_t)nb_sockets + 1, addr_from, addr_dest, dest_if, received_ecn,
+        buffer, buffer_max, delta_t, thread_ctx, &action, socket_rank);
+#else
+    bytes_recv = picoquic_packet_loop_select(s_ctx, nb_sockets, NULL, 0, current_time,
+        addr_from, addr_dest, dest_if, received_ecn, buffer, buffer_max, delta_t,
+        thread_ctx, &action, socket_rank);
+#endif
+    if (is_wake_up_event != NULL) {
+        *is_wake_up_event = (action == picoquic_packet_loop_action_wake_up);
+    }
+    return bytes_recv;
+}
+#endif
+
 #ifdef _WINDOWS
 DWORD WINAPI picoquic_packet_loop_v3(LPVOID v_ctx)
 #else
@@ -3533,7 +3565,7 @@ static void picoquic_close_network_wake_up(picoquic_network_thread_ctx_t* thread
     }
 }
 
-static void picoquic_open_network_wake_up(picoquic_network_thread_ctx_t* thread_ctx, int *ret)
+void picoquic_open_network_wake_up(picoquic_network_thread_ctx_t* thread_ctx, int *ret)
 {
     thread_ctx->wake_up_defined = 0;
 #ifdef _WINDOWS

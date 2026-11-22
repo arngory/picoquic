@@ -101,6 +101,8 @@ typedef struct st_picoquic_quic_config_t {
     int nb_threads;
     int dest_if;
     int mtu_max;
+    int initial_send_mtu_ipv4;
+    int initial_send_mtu_ipv6;
     int cnx_id_length;
     int idle_timeout;
     int socket_buffer_size;

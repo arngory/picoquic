@@ -27,6 +27,7 @@
 #include "picoquictest_internal.h"
 #include "tls_api.h"
 #include "picoquic_qlog.h"
+#include "picoquic_config.h"
 
 
 /* This file includes a series of tests covering edge cases, typically
@@ -2703,15 +2704,17 @@ int stream_data_nodes_attack_test(void)
         ret = -1;
     }
     if (ret == 0) {
-        /* Smallest count above 128 such that count * 1536 > window * 6 */
+        /* Smallest count above 128 such that count * 1536 > window * PICOQUIC_REORDER_MEMORY_FACTOR */
         picoquic_set_callback(cnx, stream_data_nodes_noop_callback, NULL);
-        nb_trigger = ((cnx->maxdata_local - cnx->data_received) * 6) / 1536 + 1;
+        nb_trigger = ((cnx->maxdata_local - cnx->data_received) * PICOQUIC_REORDER_MEMORY_FACTOR) / 1536 + 1;
         if (nb_trigger < 129) {
             nb_trigger = 129;
         }
     }
 
-    for (uint64_t stream_id = 0; ret == 0 && !is_closed && stream_id < 4 * 100; stream_id += 4) {
+    /* 200 nodes per stream, on as many streams as the trigger needs (the factor of the fork is
+     * larger than upstream's 6) */
+    for (uint64_t stream_id = 0; ret == 0 && !is_closed && stream_id < 4 * (nb_trigger / 200 + 2); stream_id += 4) {
         for (uint64_t offset = 1; ret == 0 && !is_closed && offset < 400; offset += 2) {
             (void)stream_data_nodes_decode_byte(cnx, stream_id, offset, simulated_time);
             if (cnx->cnx_state > picoquic_state_ready) {
@@ -2892,14 +2895,14 @@ int direct_receive_duplicate_test(void)
         ret = -1;
     }
     if (ret == 0) {
-        nb_trigger = ((cnx->maxdata_local - cnx->data_received) * 6) / 1536 + 1;
+        nb_trigger = ((cnx->maxdata_local - cnx->data_received) * PICOQUIC_REORDER_MEMORY_FACTOR) / 1536 + 1;
         if (nb_trigger < 129) {
             nb_trigger = 129;
         }
     }
 
     /* One byte fragments spread over many streams, 200 per stream, must still trip the connection check. */
-    for (uint64_t stream_id = 8; ret == 0 && !is_closed && stream_id < 8 + 4 * 100; stream_id += 4) {
+    for (uint64_t stream_id = 8; ret == 0 && !is_closed && stream_id < 8 + 4 * (nb_trigger / 200 + 2); stream_id += 4) {
         for (uint64_t offset = 1; ret == 0 && !is_closed && offset < 400; offset += 2) {
             (void)stream_data_nodes_decode_byte(cnx, stream_id, offset, simulated_time);
             if (cnx->cnx_state > picoquic_state_ready) {
@@ -2925,7 +2928,7 @@ int direct_receive_duplicate_test(void)
 
 /* Issue 2333: in order data grows the stream window far past the max_data limit, then one byte
  * fragments at odd offsets. The connection wide check must still close the connection once the
- * node count exceeds 6 times the connection window, which the limit bounds. */
+ * node count exceeds PICOQUIC_REORDER_MEMORY_FACTOR times the connection window, which the limit bounds. */
 #define STREAM_DATA_NODES_LIMIT 0x40000
 
 int stream_data_nodes_limit_test(void)
@@ -2985,12 +2988,12 @@ int stream_data_nodes_limit_test(void)
     }
 
     if (ret == 0) {
-        nb_trigger = ((cnx->maxdata_local - cnx->data_received) * 6) / 1536 + 1;
+        nb_trigger = ((cnx->maxdata_local - cnx->data_received) * PICOQUIC_REORDER_MEMORY_FACTOR) / 1536 + 1;
         if (nb_trigger < 129) {
             nb_trigger = 129;
         }
-        stream_trigger = ((stream->maxdata_local - stream->consumed_offset) * 6) / 1536 + 1;
-        if (nb_trigger > (STREAM_DATA_NODES_LIMIT * 6) / 1536 + 1 || stream_trigger <= nb_trigger) {
+        stream_trigger = ((stream->maxdata_local - stream->consumed_offset) * PICOQUIC_REORDER_MEMORY_FACTOR) / 1536 + 1;
+        if (nb_trigger > (STREAM_DATA_NODES_LIMIT * PICOQUIC_REORDER_MEMORY_FACTOR) / 1536 + 1 || stream_trigger <= nb_trigger) {
             DBG_PRINTF("Connection trigger %" PRIu64 ", stream trigger %" PRIu64, nb_trigger, stream_trigger);
             ret = -1;
         }
@@ -3156,6 +3159,333 @@ int reset_after_fin_received_test(void)
         }
     }
 
+    if (test_ctx != NULL) {
+        tls_api_delete_ctx(test_ctx);
+    }
+    return ret;
+}
+
+/* slipstream: a datagram of an unknown version, with connection ID lengths that do not fit
+ * in it, must not make the server read past the datagram to build a version negotiation
+ * (the fork's floor of 64 bytes no longer covers the 517 bytes the two IDs can take).
+ * Each datagram is a malloc of its exact size, so that ASan sees any read past it.
+ * A client-only context must not build a version negotiation at all; a server still
+ * answers an unknown version whose IDs fit. Returns the number of queued packets. */
+static int vn_bounds_one(picoquic_quic_t* quic, size_t length, uint8_t dcid_length, uint8_t scid_length,
+    struct sockaddr* addr_from, struct sockaddr* addr_to, uint64_t current_time, int* nb_queued)
+{
+    int ret = 0;
+    uint8_t* bytes = (uint8_t*)malloc(length);
+    picoquic_stateless_packet_t* sp;
+
+    *nb_queued = 0;
+    if (bytes == NULL) {
+        return -1;
+    }
+    memset(bytes, 0x55, length);
+    bytes[0] = 0xc0;
+    picoformat_32(bytes + 1, 0x1a2a3a4a); /* not a version of picoquic */
+    bytes[5] = dcid_length;
+    if (6 + (size_t)dcid_length < length) {
+        bytes[6 + dcid_length] = scid_length;
+    }
+    (void)picoquic_incoming_packet(quic, bytes, length, addr_from, addr_to, 0, 0, current_time);
+    while ((sp = picoquic_dequeue_stateless_packet(quic)) != NULL) {
+        if (sp->length > 7 + (size_t)dcid_length + (size_t)scid_length + 4 * (picoquic_nb_supported_versions + 1)) {
+            DBG_PRINTF("Stateless packet of %zu bytes for a %zu-byte datagram", sp->length, length);
+            ret = -1;
+        }
+        (*nb_queued)++;
+        picoquic_delete_stateless_packet(sp);
+    }
+    free(bytes);
+    return ret;
+}
+
+int vn_bounds_test(void)
+{
+    uint64_t simulated_time = 0;
+    picoquic_test_tls_api_ctx_t* test_ctx = NULL;
+    int nb_queued = 0;
+    int ret = tls_api_init_ctx(&test_ctx, PICOQUIC_INTERNAL_TEST_VERSION_1,
+        PICOQUIC_TEST_SNI, PICOQUIC_TEST_ALPN, &simulated_time, NULL, NULL, 0, 1, 0);
+
+    if (ret == 0 && (!test_ctx->qclient->enforce_client_only || test_ctx->qserver->enforce_client_only)) {
+        DBG_PRINTF("%s", "Expected a client-only client context and a server context");
+        ret = -1;
+    }
+    /* IDs that do not fit: nothing queued, nothing read past the datagram, on either side */
+    for (int side = 0; ret == 0 && side < 2; side++) {
+        picoquic_quic_t* quic = (side == 0) ? test_ctx->qserver : test_ctx->qclient;
+        struct sockaddr* addr_from = (struct sockaddr*)((side == 0) ? &test_ctx->client_addr : &test_ctx->server_addr);
+        struct sockaddr* addr_to = (struct sockaddr*)((side == 0) ? &test_ctx->server_addr : &test_ctx->client_addr);
+        const size_t lengths[] = { PICOQUIC_ENFORCED_INITIAL_MTU, 64, 129, 255, 300 };
+        const uint8_t cid_lengths[][2] = { { 255, 255 }, { 255, 0 }, { 8, 255 }, { 0, 255 }, { 200, 100 } };
+
+        quic->is_port_blocking_disabled = 1;
+        for (size_t i = 0; ret == 0 && i < sizeof(lengths) / sizeof(lengths[0]); i++) {
+            for (size_t j = 0; ret == 0 && j < sizeof(cid_lengths) / sizeof(cid_lengths[0]); j++) {
+                if (lengths[i] < PICOQUIC_ENFORCED_INITIAL_MTU ||
+                    7 + (size_t)cid_lengths[j][0] + (size_t)cid_lengths[j][1] <= lengths[i]) {
+                    continue;
+                }
+                ret = vn_bounds_one(quic, lengths[i], cid_lengths[j][0], cid_lengths[j][1], addr_from, addr_to,
+                    simulated_time, &nb_queued);
+                if (ret == 0 && nb_queued != 0) {
+                    DBG_PRINTF("Side %d, %zu bytes, CIDs %d/%d: %d packets queued", side, lengths[i],
+                        cid_lengths[j][0], cid_lengths[j][1], nb_queued);
+                    ret = -1;
+                }
+            }
+        }
+    }
+    /* IDs that fit: the server answers, the client-only context does not */
+    for (int side = 0; ret == 0 && side < 2; side++) {
+        picoquic_quic_t* quic = (side == 0) ? test_ctx->qserver : test_ctx->qclient;
+        struct sockaddr* addr_from = (struct sockaddr*)((side == 0) ? &test_ctx->client_addr : &test_ctx->server_addr);
+        struct sockaddr* addr_to = (struct sockaddr*)((side == 0) ? &test_ctx->server_addr : &test_ctx->client_addr);
+        const size_t lengths[] = { 64, 129 };
+
+        for (size_t i = 0; ret == 0 && i < sizeof(lengths) / sizeof(lengths[0]); i++) {
+            if (lengths[i] < PICOQUIC_ENFORCED_INITIAL_MTU) {
+                continue;
+            }
+            ret = vn_bounds_one(quic, lengths[i], 8, 8, addr_from, addr_to, simulated_time, &nb_queued);
+            if (ret == 0 && nb_queued != ((side == 0) ? 1 : 0)) {
+                DBG_PRINTF("Side %d, %zu bytes, CIDs 8/8: %d packets queued", side, lengths[i], nb_queued);
+                ret = -1;
+            }
+        }
+    }
+    /* At the exact fit, a CID length of 255 each: 517 bytes */
+    if (ret == 0) {
+        ret = vn_bounds_one(test_ctx->qserver, 517, 255, 255, (struct sockaddr*)&test_ctx->client_addr,
+            (struct sockaddr*)&test_ctx->server_addr, simulated_time, &nb_queued);
+        if (ret == 0 && nb_queued != 1) {
+            DBG_PRINTF("517 bytes, CIDs 255/255: %d packets queued", nb_queued);
+            ret = -1;
+        }
+    }
+
+    if (test_ctx != NULL) {
+        tls_api_delete_ctx(test_ctx);
+    }
+    return ret;
+}
+
+/* slipstream: handshake and transfer at a small send MTU on both sides. The room left for a
+ * packet coalesced after the server's Initial can be less than a header, a frame and the
+ * checksum: picoquic must then send nothing, rather than a packet without frames (which
+ * the client closes the connection for, PROTOCOL_VIOLATION) or a packet written past the
+ * send buffer (the server's handshake PING). */
+static int small_mtu_one(uint32_t mtu, uint8_t client_cid_length, int multipath)
+{
+    uint64_t simulated_time = 0;
+    picoquic_test_tls_api_ctx_t* test_ctx = NULL;
+    test_api_stream_desc_t scenario[] = { { 4, 0, 257, 2000 }, { 8, 4, 531, 3000 } };
+    picoquic_connection_id_t icid = { { 0x5a, 0x11, 3, 4, 5, 6, 7, 8 }, 8 };
+    int ret;
+
+    icid.id[2] = (uint8_t)mtu;
+    icid.id[3] = client_cid_length;
+    ret = tls_api_init_ctx_ex(&test_ctx, PICOQUIC_INTERNAL_TEST_VERSION_1, PICOQUIC_TEST_SNI, PICOQUIC_TEST_ALPN,
+        &simulated_time, NULL, NULL, 0, 1, 0, &icid);
+    if (ret == 0) {
+        picoquic_delete_cnx(test_ctx->cnx_client);
+        test_ctx->cnx_client = NULL;
+        if (picoquic_set_default_connection_id_length(test_ctx->qclient, client_cid_length) != 0 ||
+            picoquic_set_initial_send_mtu(test_ctx->qclient, mtu, mtu) != 0 ||
+            picoquic_set_initial_send_mtu(test_ctx->qserver, mtu, mtu) != 0) {
+            DBG_PRINTF("Cannot set CID length %d or MTU %u", client_cid_length, mtu);
+            ret = -1;
+        }
+    }
+    if (ret == 0) {
+        picoquic_set_mtu_max(test_ctx->qclient, mtu);
+        if (multipath) {
+            picoquic_set_default_multipath_option(test_ctx->qclient, 1);
+            picoquic_set_default_multipath_option(test_ctx->qserver, 1);
+        }
+        test_ctx->cnx_client = picoquic_create_cnx(test_ctx->qclient, icid, picoquic_null_connection_id,
+            (struct sockaddr*)&test_ctx->server_addr, simulated_time, PICOQUIC_INTERNAL_TEST_VERSION_1,
+            PICOQUIC_TEST_SNI, PICOQUIC_TEST_ALPN, 1);
+        if (test_ctx->cnx_client == NULL) {
+            ret = -1;
+        }
+    }
+    if (ret == 0) {
+        ret = tls_api_one_scenario_body(test_ctx, &simulated_time, scenario, sizeof(scenario), 0, 0, 0, 0, 0);
+        if (ret != 0) {
+            DBG_PRINTF("MTU %u, client CID %d, multipath %d: client error 0x%" PRIx64 "/0x%" PRIx64 ", server %s",
+                mtu, client_cid_length, multipath, test_ctx->cnx_client->local_error, test_ctx->cnx_client->remote_error,
+                (test_ctx->cnx_server == NULL) ? "none" : "present");
+        }
+    }
+
+    if (test_ctx != NULL) {
+        tls_api_delete_ctx(test_ctx);
+    }
+    return ret;
+}
+
+int small_mtu_handshake_test(void)
+{
+    /* Cases where the series sent a packet without frames (an empty Initial or Handshake,
+     * PROTOCOL_VIOLATION at the client), or wrote the server's handshake PING past a
+     * 1536-byte send buffer (MTU 1523 to 1536). */
+    const uint32_t cases[][2] = { { 137, 8 }, { 110, 8 }, { 129, 4 }, { 120, 16 }, { 150, 20 }, { 90, 4 },
+        { 1530, 8 }, { 1536, 8 } };
+    int ret = 0;
+
+    for (size_t i = 0; ret == 0 && i < sizeof(cases) / sizeof(cases[0]); i++) {
+        if (cases[i][0] < PICOQUIC_ENFORCED_INITIAL_MTU) {
+            continue;
+        }
+        for (int multipath = 0; ret == 0 && multipath < 2; multipath++) {
+            ret = small_mtu_one(cases[i][0], (uint8_t)cases[i][1], multipath);
+        }
+    }
+    return ret;
+}
+
+/* slipstream: picoquic_set_initial_send_mtu takes 0 (upstream's value) or a value in
+ * [PICOQUIC_ENFORCED_INITIAL_MTU, PICOQUIC_MAX_PACKET_SIZE], and nothing else:
+ * below about 58 bytes the client's Initial padding was a negative memset, up to the
+ * enforced MTU the connection never started, and above the packet buffers it overflowed. */
+int initial_send_mtu_bounds_test(void)
+{
+    uint64_t simulated_time = 0;
+    picoquic_test_tls_api_ctx_t* test_ctx = NULL;
+    int ret = tls_api_init_ctx(&test_ctx, PICOQUIC_INTERNAL_TEST_VERSION_1,
+        PICOQUIC_TEST_SNI, PICOQUIC_TEST_ALPN, &simulated_time, NULL, NULL, 0, 1, 0);
+    const struct {
+        uint32_t v4;
+        uint32_t v6;
+        int expected;
+    } cases[] = {
+        { 0, 0, 0 },
+        { 34, 34, PICOQUIC_ERROR_INITIAL_TOO_SHORT },
+        { 58, 58, PICOQUIC_ERROR_INITIAL_TOO_SHORT },
+        { 59, 59, PICOQUIC_ERROR_INITIAL_TOO_SHORT },
+        { PICOQUIC_ENFORCED_INITIAL_MTU - 1, PICOQUIC_ENFORCED_INITIAL_MTU - 1, PICOQUIC_ERROR_INITIAL_TOO_SHORT },
+        { PICOQUIC_ENFORCED_INITIAL_MTU, PICOQUIC_ENFORCED_INITIAL_MTU, 0 },
+        { PICOQUIC_ENFORCED_INITIAL_MTU, 1, PICOQUIC_ERROR_INITIAL_TOO_SHORT },
+        { 900, 0, 0 },
+        { PICOQUIC_MAX_PACKET_SIZE, PICOQUIC_MAX_PACKET_SIZE, 0 },
+        { PICOQUIC_MAX_PACKET_SIZE + 1, 900, PICOQUIC_ERROR_PACKET_TOO_BIG },
+        { 900, PICOQUIC_MAX_PACKET_SIZE + 1, PICOQUIC_ERROR_PACKET_TOO_BIG },
+        { 0xffffffff, 0xffffffff, PICOQUIC_ERROR_PACKET_TOO_BIG }
+    };
+
+    for (size_t i = 0; ret == 0 && i < sizeof(cases) / sizeof(cases[0]); i++) {
+        uint32_t old_v4 = 1000 + (uint32_t)i;
+        uint32_t old_v6 = 1100 + (uint32_t)i;
+        int r;
+
+        test_ctx->qclient->initial_send_mtu_ipv4 = old_v4;
+        test_ctx->qclient->initial_send_mtu_ipv6 = old_v6;
+        r = picoquic_set_initial_send_mtu(test_ctx->qclient, cases[i].v4, cases[i].v6);
+        if (r != cases[i].expected) {
+            DBG_PRINTF("MTU %u/%u: returns 0x%x, expected 0x%x", cases[i].v4, cases[i].v6, r, cases[i].expected);
+            ret = -1;
+        }
+        else if (r == 0 && (test_ctx->qclient->initial_send_mtu_ipv4 != cases[i].v4 ||
+            test_ctx->qclient->initial_send_mtu_ipv6 != cases[i].v6)) {
+            DBG_PRINTF("MTU %u/%u accepted but not set", cases[i].v4, cases[i].v6);
+            ret = -1;
+        }
+        else if (r != 0 && (test_ctx->qclient->initial_send_mtu_ipv4 != old_v4 ||
+            test_ctx->qclient->initial_send_mtu_ipv6 != old_v6)) {
+            DBG_PRINTF("MTU %u/%u refused but changed", cases[i].v4, cases[i].v6);
+            ret = -1;
+        }
+    }
+    if (test_ctx != NULL) {
+        tls_api_delete_ctx(test_ctx);
+    }
+
+    /* Through the configuration, an MTU out of bounds makes the context creation fail */
+    if (ret == 0) {
+        picoquic_quic_config_t config;
+        picoquic_quic_t* quic;
+
+        picoquic_config_init(&config);
+        config.initial_send_mtu_ipv4 = PICOQUIC_ENFORCED_INITIAL_MTU - 1;
+        config.initial_send_mtu_ipv6 = PICOQUIC_ENFORCED_INITIAL_MTU - 1;
+        if ((quic = picoquic_create_and_configure(&config, NULL, NULL, simulated_time, &simulated_time)) != NULL) {
+            DBG_PRINTF("%s", "Context created with an initial MTU below the enforced MTU");
+            picoquic_free(quic);
+            ret = -1;
+        }
+        config.initial_send_mtu_ipv4 = PICOQUIC_ENFORCED_INITIAL_MTU;
+        config.initial_send_mtu_ipv6 = PICOQUIC_ENFORCED_INITIAL_MTU;
+        if (ret == 0) {
+            if ((quic = picoquic_create_and_configure(&config, NULL, NULL, simulated_time, &simulated_time)) == NULL) {
+                DBG_PRINTF("%s", "Context not created with an initial MTU at the enforced MTU");
+                ret = -1;
+            }
+            else {
+                if (quic->initial_send_mtu_ipv4 != PICOQUIC_ENFORCED_INITIAL_MTU) {
+                    ret = -1;
+                }
+                picoquic_free(quic);
+            }
+        }
+        picoquic_config_clear(&config);
+    }
+
+    return ret;
+}
+
+/* slipstream: picoquic_process_ack_range records each acked packet's length in data_acked
+ * once. The ack processing of the POLL frames it carries must not record it again. */
+int poll_ack_count_test(void)
+{
+    uint64_t simulated_time = 0;
+    uint64_t loss_mask = 0;
+    picoquic_test_tls_api_ctx_t* test_ctx = NULL;
+    picoquic_cnx_t* cnx = NULL;
+    picoquic_packet_t* packet = NULL;
+    int ret = tls_api_init_ctx(&test_ctx, PICOQUIC_INTERNAL_TEST_VERSION_1,
+        PICOQUIC_TEST_SNI, PICOQUIC_TEST_ALPN, &simulated_time, NULL, NULL, 0, 0, 0);
+
+    if (ret == 0) {
+        ret = tls_api_connection_loop(test_ctx, &loss_mask, 0, &simulated_time);
+    }
+    if (ret == 0 && ((cnx = test_ctx->cnx_client) == NULL || (packet = picoquic_create_packet(test_ctx->qclient)) == NULL)) {
+        ret = -1;
+    }
+    if (ret == 0) {
+        picoquic_ack_frame_data_t ack_data;
+        uint64_t send_time = simulated_time;
+
+        memset(&ack_data, 0, sizeof(ack_data));
+        ack_data.acked_path = cnx->path[0];
+        /* A 1-RTT packet holding only POLL frames, sent now */
+        packet->ptype = picoquic_packet_1rtt_protected;
+        packet->pc = picoquic_packet_context_application;
+        packet->offset = 10;
+        memset(packet->bytes, 0, 10);
+        packet->bytes[10] = picoquic_frame_type_poll;
+        packet->bytes[11] = picoquic_frame_type_poll;
+        packet->length = 12;
+        packet->send_path = cnx->path[0];
+        packet->send_time = send_time;
+        cnx->path[0]->last_time_acked_data_frame_sent = 0;
+        simulated_time += 10000;
+
+        picoquic_process_ack_of_frames(cnx, packet, &ack_data, 0, simulated_time);
+        if (ack_data.data_acked != 0 || ack_data.is_set) {
+            DBG_PRINTF("POLL frames recorded %" PRIu64 " bytes acked", ack_data.data_acked);
+            ret = -1;
+        }
+        else if (cnx->path[0]->last_time_acked_data_frame_sent == 0) {
+            DBG_PRINTF("%s", "An acked POLL no longer counts as an acked data frame");
+            ret = -1;
+        }
+        packet->send_path = NULL;
+        picoquic_recycle_packet(test_ctx->qclient, packet);
+    }
     if (test_ctx != NULL) {
         tls_api_delete_ctx(test_ctx);
     }

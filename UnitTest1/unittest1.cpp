@@ -3147,6 +3147,36 @@ namespace UnitTest1
             Assert::AreEqual(ret, 0);
         }
 
+        TEST_METHOD(vn_bounds) {
+            int ret = vn_bounds_test();
+
+            Assert::AreEqual(ret, 0);
+        }
+
+        TEST_METHOD(small_mtu_handshake) {
+            int ret = small_mtu_handshake_test();
+
+            Assert::AreEqual(ret, 0);
+        }
+
+        TEST_METHOD(initial_send_mtu_bounds) {
+            int ret = initial_send_mtu_bounds_test();
+
+            Assert::AreEqual(ret, 0);
+        }
+
+        TEST_METHOD(path_id_override) {
+            int ret = path_id_override_test();
+
+            Assert::AreEqual(ret, 0);
+        }
+
+        TEST_METHOD(poll_ack_count) {
+            int ret = poll_ack_count_test();
+
+            Assert::AreEqual(ret, 0);
+        }
+
         TEST_METHOD(stream_data_nodes_window) {
             int ret = stream_data_nodes_window_test();
 

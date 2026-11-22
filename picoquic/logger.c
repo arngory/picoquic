@@ -254,6 +254,9 @@ char const* textlog_frame_names(uint64_t frame_type)
     case picoquic_frame_type_ping:
         frame_name = "ping";
         break;
+    case picoquic_frame_type_poll:
+        frame_name = "poll";
+        break;
     case picoquic_frame_type_data_blocked:
         frame_name = "data_blocked";
         break;
@@ -1604,7 +1607,8 @@ void picoquic_textlog_frames(FILE* F, uint64_t cnx_id64, const uint8_t* bytes, s
             byte_index += textlog_retire_connection_id_frame(F, bytes + byte_index, length - byte_index, 1);
             break;
         case picoquic_frame_type_padding:
-        case picoquic_frame_type_ping: {
+        case picoquic_frame_type_ping:
+        case picoquic_frame_type_poll: {
             int nb = 0;
 
             while (byte_index < length && bytes[byte_index] == frame_id) {

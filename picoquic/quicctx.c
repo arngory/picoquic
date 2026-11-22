@@ -1899,6 +1899,21 @@ int picoquic_set_first_if_index(picoquic_cnx_t* cnx, unsigned long if_index)
     return ret;
 }
 
+/* slipstream: the link-time tag of PICOQUIC_ENFORCED_INITIAL_MTU (picoquic_internal.h) */
+const int PICOQUIC_MTU_TAG = PICOQUIC_ENFORCED_INITIAL_MTU;
+
+/* slipstream: the initial MTU set by picoquic_set_initial_send_mtu, if any.
+ * The callers decide which family counts as IPv4, as upstream does. */
+static uint32_t picoquic_initial_send_mtu(picoquic_quic_t* quic, int is_ipv4)
+{
+    uint32_t mtu = (is_ipv4) ? quic->initial_send_mtu_ipv4 : quic->initial_send_mtu_ipv6;
+
+    if (mtu == 0) {
+        mtu = (is_ipv4) ? PICOQUIC_INITIAL_MTU_IPV4 : PICOQUIC_INITIAL_MTU_IPV6;
+    }
+    return mtu;
+}
+
 /* Path management -- returns the index of the path that was created. */
 int picoquic_create_path(picoquic_cnx_t* cnx, uint64_t start_time, const struct sockaddr* local_addr,
     const struct sockaddr* peer_addr, int if_index, uint64_t requested_id)
@@ -1953,7 +1968,8 @@ int picoquic_create_path(picoquic_cnx_t* cnx, uint64_t start_time, const struct 
                 picoquic_pacing_init(&path_x->pacing, start_time);
 
                 /* Initialize the MTU */
-                path_x->send_mtu = (peer_addr == NULL || peer_addr->sa_family == AF_INET) ? PICOQUIC_INITIAL_MTU_IPV4 : PICOQUIC_INITIAL_MTU_IPV6;
+                path_x->send_mtu = picoquic_initial_send_mtu(cnx->quic,
+                    peer_addr == NULL || peer_addr->sa_family == AF_INET);
 
                 /* initialize the quality reporting thresholds */
                 path_x->rtt_update_delta = cnx->rtt_update_delta;
@@ -2631,11 +2647,17 @@ int picoquic_probe_new_tuple(picoquic_cnx_t* cnx, picoquic_path_t* path_x, struc
     return ret;
 }
 
-int picoquic_probe_new_path_ex(picoquic_cnx_t* cnx, const struct sockaddr* addr_peer,
-    const struct sockaddr* addr_local, int if_index, uint64_t current_time, int to_preferred_address)
+/* slipstream: as picoquic_probe_new_path_ex, and path_id_p (if not NULL) receives
+ * the index of the new path, or -1. */
+int picoquic_probe_new_path_id_ex(picoquic_cnx_t* cnx, const struct sockaddr* addr_peer,
+    const struct sockaddr* addr_local, int if_index, uint64_t current_time, int to_preferred_address, int* path_id_p)
 {
     int path_id = -1;
     PICOQUIC_THREAD_CHECK(cnx->quic);
+
+    if (path_id_p != NULL) {
+        *path_id_p = -1;
+    }
 
     if (!cnx->is_multipath_enabled || to_preferred_address) {
         return picoquic_probe_new_tuple(cnx, cnx->path[0], addr_peer, addr_local, if_index, current_time, to_preferred_address);
@@ -2664,6 +2686,10 @@ int picoquic_probe_new_path_ex(picoquic_cnx_t* cnx, const struct sockaddr* addr_
                 picoquic_set_path_challenge(cnx, path_id, current_time);
                 path_x->is_nat_challenge = 0;
                 // path_x->first_tuple->if_index = if_index;
+                /* slipstream: the client keeps the index of each resolver's path */
+                if (path_id_p != NULL) {
+                    *path_id_p = path_id;
+                }
             }
         }
         else {
@@ -2719,6 +2745,12 @@ int picoquic_probe_new_path(picoquic_cnx_t* cnx, const struct sockaddr* addr_pee
     const struct sockaddr* addr_local, uint64_t current_time)
 {
     return picoquic_probe_new_path_ex(cnx, addr_peer, addr_local, 0, current_time, 0);
+}
+
+int picoquic_probe_new_path_ex(picoquic_cnx_t* cnx, const struct sockaddr* addr_peer,
+    const struct sockaddr* addr_local, int if_index, uint64_t current_time, int to_preferred_address)
+{
+    return picoquic_probe_new_path_id_ex(cnx, addr_peer, addr_local, if_index, current_time, to_preferred_address, NULL);
 }
 
 int picoquic_demote_local_cnxid_list(picoquic_cnx_t* cnx, uint64_t unique_path_id,
@@ -3058,8 +3090,8 @@ void picoquic_update_peer_addr(picoquic_path_t* path_x, const struct sockaddr* p
 void picoquic_reset_path_mtu(picoquic_path_t* path_x)
 {
     /* Re-initialize the MTU */
-    path_x->send_mtu = (path_x->first_tuple->peer_addr.ss_family == 0 || path_x->first_tuple->peer_addr.ss_family == AF_INET) ?
-        PICOQUIC_INITIAL_MTU_IPV4 : PICOQUIC_INITIAL_MTU_IPV6;
+    path_x->send_mtu = picoquic_initial_send_mtu(path_x->cnx->quic, path_x->first_tuple == NULL ||
+        path_x->first_tuple->peer_addr.ss_family == 0 || path_x->first_tuple->peer_addr.ss_family == AF_INET);
     /* Reset the MTU discovery context */
     path_x->send_mtu_max_tried = 0;
     path_x->mtu_probe_sent = 0;
@@ -4168,7 +4200,7 @@ picoquic_cnx_t* picoquic_create_cnx_internal(picoquic_quic_t* quic,
         }
         
         cnx->ack_frequency_sequence_local = UINT64_MAX;
-        cnx->ack_gap_local = 2;
+        cnx->ack_gap_local = 10;
         cnx->ack_frequency_delay_local = PICOQUIC_ACK_DELAY_MAX_DEFAULT;
         cnx->ack_frequency_sequence_remote = UINT64_MAX;
         cnx->ack_gap_remote = 2;
@@ -4643,6 +4675,31 @@ void picoquic_set_mtu_max(picoquic_quic_t* quic, uint32_t mtu_max)
     PICOQUIC_THREAD_CHECK(quic);
     quic->mtu_max = mtu_max;
     quic->default_tp.max_packet_size = mtu_max;
+}
+
+static int picoquic_check_initial_send_mtu(uint32_t mtu)
+{
+    if (mtu != 0 && mtu < PICOQUIC_ENFORCED_INITIAL_MTU) {
+        return PICOQUIC_ERROR_INITIAL_TOO_SHORT;
+    }
+    if (mtu > PICOQUIC_MAX_PACKET_SIZE) {
+        return PICOQUIC_ERROR_PACKET_TOO_BIG;
+    }
+    return 0;
+}
+
+int picoquic_set_initial_send_mtu(picoquic_quic_t* quic, uint32_t intitial_mtu_ipv4, uint32_t intitial_mtu_ipv6)
+{
+    int ret = picoquic_check_initial_send_mtu(intitial_mtu_ipv4);
+
+    if (ret == 0) {
+        ret = picoquic_check_initial_send_mtu(intitial_mtu_ipv6);
+    }
+    if (ret == 0) {
+        quic->initial_send_mtu_ipv4 = intitial_mtu_ipv4;
+        quic->initial_send_mtu_ipv6 = intitial_mtu_ipv6;
+    }
+    return ret;
 }
 
 void picoquic_set_alpn_select_fn(picoquic_quic_t* quic, picoquic_alpn_select_fn alpn_select_fn)

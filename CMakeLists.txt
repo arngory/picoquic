@@ -487,23 +487,23 @@ macro(set_picoquic_compile_settings)
             CXX_EXTENSIONS YES)
     target_compile_options(${ARGV0}
         PRIVATE
-            $<$<C_COMPILER_ID:Clang>: -O3 -Wall -fno-exceptions
+            $<$<C_COMPILER_ID:Clang>: -Wall
                 -fno-signed-zeros -fno-trapping-math
                 ${PICOQUIC_ADDITIONAL_C_FLAGS}>
-            $<$<C_COMPILER_ID:AppleClang>: -O3 -Wall -fno-exceptions
+            $<$<C_COMPILER_ID:AppleClang>: -Wall
                 -fno-signed-zeros -fno-trapping-math
                 ${PICOQUIC_ADDITIONAL_C_FLAGS}>
-            $<$<C_COMPILER_ID:GNU>: -O3 -Wall -fno-exceptions
+            $<$<C_COMPILER_ID:GNU>: -Wall
                 -fno-signed-zeros -frename-registers -fno-trapping-math
                 ${PICOQUIC_ADDITIONAL_C_FLAGS}>
             $<$<C_COMPILER_ID:MSVC>: >
-            $<$<CXX_COMPILER_ID:Clang>: -O3 -Wall -fno-exceptions
+            $<$<CXX_COMPILER_ID:Clang>: -Wall
                 -fno-signed-zeros -fno-trapping-math
                 ${PICOQUIC_ADDITIONAL_CXX_FLAGS}>
-            $<$<CXX_COMPILER_ID:AppleClang>: -O3 -Wall -fno-exceptions
+            $<$<CXX_COMPILER_ID:AppleClang>: -Wall
                 -fno-signed-zeros -fno-trapping-math
                 ${PICOQUIC_ADDITIONAL_CXX_FLAGS}>
-            $<$<CXX_COMPILER_ID:GNU>: -O3 -Wall -fno-exceptions
+            $<$<CXX_COMPILER_ID:GNU>: -Wall
                 -fno-signed-zeros -frename-registers -fno-trapping-math
                 ${PICOQUIC_ADDITIONAL_CXX_FLAGS}>
             $<$<CXX_COMPILER_ID:MSVC>: >)
@@ -512,6 +512,19 @@ macro(set_picoquic_compile_settings)
 endmacro()
 
 add_library(picoquic-core ${PICOQUIC_CORE_HEADERS} ${PICOQUIC_LIBRARY_FILES})
+# slipstream: QUIC over DNS needs packets below RFC 9000's 1200 bytes. The value is
+# PUBLIC so that code including picoquic_internal.h sees the same one; code built with
+# another value fails to link (picoquic_built_with_enforced_initial_mtu_<value>).
+set(PICOQUIC_ENFORCED_INITIAL_MTU "64" CACHE STRING "Smallest initial packet, 64 to 1200 (slipstream: 64)")
+if(PICOQUIC_ENFORCED_INITIAL_MTU STREQUAL "")
+    # a cache from before the default was set
+    set(PICOQUIC_ENFORCED_INITIAL_MTU 64)
+endif()
+if(NOT PICOQUIC_ENFORCED_INITIAL_MTU MATCHES "^[0-9]+$" OR
+    PICOQUIC_ENFORCED_INITIAL_MTU LESS 64 OR PICOQUIC_ENFORCED_INITIAL_MTU GREATER 1200)
+    message(FATAL_ERROR "PICOQUIC_ENFORCED_INITIAL_MTU must be a number in [64, 1200], not '${PICOQUIC_ENFORCED_INITIAL_MTU}'")
+endif()
+target_compile_definitions(picoquic-core PUBLIC PICOQUIC_ENFORCED_INITIAL_MTU=${PICOQUIC_ENFORCED_INITIAL_MTU})
 target_sources(picoquic-core PRIVATE ${PICOQUIC_CORE_HEADERS_PRIVATE})
 add_library(picoquic::picoquic-core ALIAS picoquic-core)
 
@@ -898,3 +911,13 @@ configure_package_config_file(${PROJECT_NAME}-config.cmake.in ${CMAKE_CURRENT_BI
 write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config-version.cmake VERSION ${PROJECT_VERSION} COMPATIBILITY ExactVersion)
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config.cmake ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config-version.cmake DESTINATION ${INSTALL_CONFIG_DIR})
+
+# slipstream: the flags for a build that includes picoquic with add_subdirectory
+get_directory_property(PICOQUIC_PARENT_DIRECTORY PARENT_DIRECTORY)
+if(PICOQUIC_PARENT_DIRECTORY)
+    set(PICOQUIC_ADDITIONAL_C_FLAGS ${PICOQUIC_ADDITIONAL_C_FLAGS} PARENT_SCOPE)
+    set(PICOQUIC_ADDITIONAL_CXX_FLAGS ${PICOQUIC_ADDITIONAL_CXX_FLAGS} PARENT_SCOPE)
+    set(PICOQUIC_LINKER_FLAGS ${PICOQUIC_LINKER_FLAGS} PARENT_SCOPE)
+    set(PICOQUIC_COMPILE_DEFINITIONS "${PICOQUIC_COMPILE_DEFINITIONS}" PARENT_SCOPE)
+    set(CMAKE_REQUIRED_LIBRARIES "${CMAKE_REQUIRED_LIBRARIES}" PARENT_SCOPE)
+endif()

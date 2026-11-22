@@ -1182,6 +1182,16 @@ int picoquic_sendmsg(SOCKET_TYPE fd,
 
     /* Format the message header */
 
+    /* slipstream: at most PICOQUIC_MAX_GSO_SEGMENTS segments in one UDP_SEGMENT send,
+     * the last one possibly shorter (so the count rounds up) */
+    if (send_msg_size > 0) {
+        const int segment_count = (length + send_msg_size - 1) / send_msg_size;
+        if (segment_count > PICOQUIC_MAX_GSO_SEGMENTS) {
+            DBG_PRINTF("Segment count %d too large\n", segment_count);
+            return -1;
+        }
+    }
+
     dataBuf.iov_base = (char*)bytes;
     dataBuf.iov_len = length;
 
@@ -1202,8 +1212,8 @@ int picoquic_sendmsg(SOCKET_TYPE fd,
     if (bytes_sent <= 0) {
         int last_error = errno;
 #ifndef DISABLE_DEBUG_PRINTF
-        DBG_PRINTF("Could not send packet on UDP socket[AF=%d]= %d!\n",
-            addr_dest->sa_family, last_error);
+        DBG_PRINTF("Could not send packet on UDP socket[AF=%d]= %d! %s\n",
+            addr_dest->sa_family, last_error, strerror(errno));
 #endif
         if (sock_err != NULL) {
             *sock_err = last_error;

@@ -147,6 +147,13 @@ extern "C" {
 #define PICOQUIC_TRANSPORT_NO_CID_AVAILABLE (0x3e77) /* Per draft quic multipath 20 */
 
 #define PICOQUIC_MAX_PACKET_SIZE 1536
+/* slipstream: the most segments in one UDP GSO send (UDP_SEGMENT). Linux refuses more
+ * than UDP_MAX_SEGMENTS with EINVAL: 64 (1 << 6) in the 5.15, 6.1 and 6.6 kernels
+ * (Debian 12, most Android devices), 128 from 6.12. The kernel does not expose the value
+ * to user space (it is not in the uapi headers), so the smaller one is the default. */
+#ifndef PICOQUIC_MAX_GSO_SEGMENTS
+#define PICOQUIC_MAX_GSO_SEGMENTS 64
+#endif
 #define PICOQUIC_INITIAL_MTU_IPV4 1252
 #define PICOQUIC_INITIAL_MTU_IPV6 1232
 #define PICOQUIC_RESET_SECRET_SIZE 16
@@ -976,6 +983,16 @@ uint64_t picoquic_get_default_connection_id_ttl(picoquic_quic_t* quic);
 #define PICOQUIC_MTU_OVERHEAD(p_s_addr) (((p_s_addr)->sa_family==AF_INET6)?48:28)
 void picoquic_set_mtu_max(picoquic_quic_t* quic, uint32_t mtu_max);
 
+/* slipstream: the UDP payload size of the first packets of each new path, IPv4 and IPv6
+ * (upstream: PICOQUIC_INITIAL_MTU_IPV4 and _IPV6). 0 keeps upstream's value for that family.
+ * Any other value must be in [PICOQUIC_ENFORCED_INITIAL_MTU, PICOQUIC_MAX_PACKET_SIZE]:
+ * - below the enforced MTU, a client's Initial is smaller than what servers take (they drop
+ *   it, and the connection never starts), and from about 58 bytes down it is smaller than
+ *   the Initial itself;
+ * - above PICOQUIC_MAX_PACKET_SIZE, packets would not fit in picoquic's packet buffers.
+ * Returns 0, or PICOQUIC_ERROR_INITIAL_TOO_SHORT or PICOQUIC_ERROR_PACKET_TOO_BIG; on an
+ * error neither value is changed. The caller's send buffers must hold the value. */
+int picoquic_set_initial_send_mtu(picoquic_quic_t* quic, uint32_t intitial_mtu_ipv4, uint32_t intitial_mtu_ipv6);
 
 /* Set the ALPN function used to verify incoming ALPN */
 void picoquic_set_alpn_select_fn(picoquic_quic_t* quic, picoquic_alpn_select_fn alpn_select_fn);
@@ -1175,6 +1192,8 @@ int picoquic_probe_new_path(picoquic_cnx_t* cnx, const struct sockaddr* addr_pee
     const struct sockaddr* addr_local, uint64_t current_time);
 int picoquic_probe_new_path_ex(picoquic_cnx_t* cnx, const struct sockaddr* addr_peer,
     const struct sockaddr* addr_local, int if_index, uint64_t current_time, int to_preferred_address);
+int picoquic_probe_new_path_id_ex(picoquic_cnx_t* cnx, const struct sockaddr* addr_peer,
+    const struct sockaddr* addr_local, int if_index, uint64_t current_time, int to_preferred_address, int* path_id_p);
 int picoquic_probe_new_tuple(picoquic_cnx_t* cnx, picoquic_path_t* path_x, struct sockaddr const* addr_peer,
     struct sockaddr const* addr_local, int if_index, uint64_t current_time, int to_preferred_address);
 void picoquic_enable_path_callbacks(picoquic_cnx_t* cnx, int are_enabled);
@@ -1399,6 +1418,22 @@ int picoquic_incoming_packet_ex(
     unsigned char received_ecn,
     picoquic_cnx_t** first_cnx,
     uint64_t current_time);
+/* slipstream: also returns in *first_path_id the index in (*first_cnx)->path of the path
+ * the first packet of the datagram arrived on, or -1. The index is valid only until the
+ * next picoquic call on that connection (paths are deleted and the array compacted):
+ * applications that keep it longer should keep the path's unique_path_id and look the
+ * index up again. */
+int picoquic_incoming_packet_path_ex(
+    picoquic_quic_t* quic,
+    uint8_t* bytes,
+    size_t packet_length,
+    struct sockaddr* addr_from,
+    struct sockaddr* addr_to,
+    int if_index_to,
+    unsigned char received_ecn,
+    picoquic_cnx_t** first_cnx,
+    int* first_path_id,
+    uint64_t current_time);
 
 /* Applications must regularly poll the "next packet" API to obtain the
  * next packet that will be set over the network. The API for that is
@@ -1420,6 +1455,16 @@ int picoquic_prepare_next_packet(picoquic_quic_t* quic,
     picoquic_connection_id_t* p_logcid, picoquic_cnx_t** p_last_cnx);
 
 int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
+    uint64_t current_time, uint8_t* send_buffer, size_t send_buffer_max, size_t* send_length,
+    struct sockaddr_storage* p_addr_to, struct sockaddr_storage* p_addr_from, int* if_index,
+    size_t* send_msg_size);
+/* slipstream: path_id_request >= 0 sends on cnx->path[path_id_request], for example the path
+ * of the query that the packet answers (first_path_id of picoquic_incoming_packet_path_ex).
+ * A path index is valid only until the next picoquic call on the connection: paths are
+ * deleted and the array is compacted. If that path cannot take a packet (demoted,
+ * abandoned, its challenge failed, or no connection ID of the peer), picoquic's own choice
+ * is used, as with -1. */
+int picoquic_prepare_packet_path_ex(picoquic_cnx_t* cnx, int path_id_request,
     uint64_t current_time, uint8_t* send_buffer, size_t send_buffer_max, size_t* send_length,
     struct sockaddr_storage* p_addr_to, struct sockaddr_storage* p_addr_from, int* if_index,
     size_t* send_msg_size);

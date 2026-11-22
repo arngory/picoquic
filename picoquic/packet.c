@@ -999,8 +999,13 @@ int picoquic_incoming_version_negotiation(
 
 /*
  * Send a version negotiation packet in response to an incoming packet
- * sporting the wrong version number. This assumes that the original packet
- * is at least 517 bytes long.
+ * sporting the wrong version number.
+ * slipstream: the header of an unknown version is not parsed past the version,
+ * so both connection ID lengths (up to 255 each) are checked here against the
+ * bytes left in the datagram. Upstream relied on its 1200-byte floor, which
+ * holds the 517 bytes the two IDs can take; the fork's floor (64) does not.
+ * A client-only context never answers with a version negotiation (RFC 9000,
+ * 6: only servers send them).
  */
 
 void picoquic_prepare_version_negotiation(
@@ -1009,13 +1014,23 @@ void picoquic_prepare_version_negotiation(
     struct sockaddr* addr_to,
     unsigned long if_index_to,
     picoquic_packet_header* ph,
-    uint8_t* original_bytes)
+    uint8_t* original_bytes,
+    size_t length)
 {
     picoquic_cnx_t* cnx = NULL;
-    uint8_t dcid_length = original_bytes[5];
-    uint8_t * dcid = original_bytes + 6;
-    uint8_t scid_length = original_bytes[6 + dcid_length];
-    uint8_t* scid = original_bytes + 6 + dcid_length + 1;
+    uint8_t dcid_length;
+    uint8_t * dcid;
+    uint8_t scid_length;
+    uint8_t* scid;
+
+    if (quic->enforce_client_only || length < 7 || length < 7 + (size_t)original_bytes[5] ||
+        length < 7 + (size_t)original_bytes[5] + (size_t)original_bytes[6 + original_bytes[5]]) {
+        return;
+    }
+    dcid_length = original_bytes[5];
+    dcid = original_bytes + 6;
+    scid_length = original_bytes[6 + dcid_length];
+    scid = original_bytes + 6 + dcid_length + 1;
 
     /* Verify that this is not a spurious error by checking whether a connection context
      * already exists */
@@ -2133,7 +2148,8 @@ int picoquic_incoming_segment(
     uint64_t current_time,
     uint64_t receive_time,
     picoquic_connection_id_t* previous_dest_id,
-    picoquic_cnx_t** first_cnx)
+    picoquic_cnx_t** first_cnx,
+    int* p_path_id)
 {
     int ret = 0;
     picoquic_cnx_t* cnx = NULL;
@@ -2243,7 +2259,7 @@ int picoquic_incoming_segment(
         * but block reflection attacks towards protected ports. */
         if (packet_length >= PICOQUIC_ENFORCED_INITIAL_MTU){
             if (quic->is_port_blocking_disabled || !picoquic_check_addr_blocked(addr_from)) {
-                picoquic_prepare_version_negotiation(quic, addr_from, addr_to, if_index_to, &ph, raw_bytes);
+                picoquic_prepare_version_negotiation(quic, addr_from, addr_to, if_index_to, &ph, raw_bytes, length);
             }
         }
     } else if (ret == PICOQUIC_ERROR_RETRY_NEEDED) {
@@ -2449,10 +2465,17 @@ int picoquic_incoming_segment(
     }
     quic->input_segment_node_taken = saved_input_segment_node_taken;
 
+    /* slipstream: the path of the segment, so the answer goes on it */
+    if (p_path_id != NULL && path_id >= 0) {
+        *p_path_id = path_id;
+    }
+
     return ret;
 }
 
-int picoquic_incoming_packet_ex(
+/* slipstream: as picoquic_incoming_packet_ex, and first_path_id (if not NULL)
+ * receives the index of the path of the last segment processed. */
+int picoquic_incoming_packet_path_ex(
     picoquic_quic_t* quic,
     uint8_t* bytes,
     size_t packet_length,
@@ -2461,6 +2484,7 @@ int picoquic_incoming_packet_ex(
     int if_index_to,
     unsigned char received_ecn,
     picoquic_cnx_t** first_cnx,
+    int* first_path_id,
     uint64_t current_time)
 {
     size_t consumed_index = 0;
@@ -2474,7 +2498,7 @@ int picoquic_incoming_packet_ex(
         ret = picoquic_incoming_segment(quic, bytes + consumed_index, 
             packet_length - consumed_index, packet_length,
             &consumed, addr_from, addr_to, if_index_to, received_ecn, current_time, current_time,
-            &previous_destid, first_cnx);
+            &previous_destid, first_cnx, first_path_id);
 
         if (ret == 0) {
             consumed_index += consumed;
@@ -2493,6 +2517,21 @@ int picoquic_incoming_packet_ex(
     }
 
     return ret;
+}
+
+int picoquic_incoming_packet_ex(
+    picoquic_quic_t* quic,
+    uint8_t* bytes,
+    size_t packet_length,
+    struct sockaddr* addr_from,
+    struct sockaddr* addr_to,
+    int if_index_to,
+    unsigned char received_ecn,
+    picoquic_cnx_t** first_cnx,
+    uint64_t current_time)
+{
+    return picoquic_incoming_packet_path_ex(quic, bytes, packet_length, addr_from, addr_to,
+        if_index_to, received_ecn, first_cnx, NULL, current_time);
 }
 
 int picoquic_incoming_packet(
@@ -2551,7 +2590,7 @@ void picoquic_process_sooner_packets(picoquic_cnx_t* cnx, uint64_t current_time)
                 ret = picoquic_incoming_segment(cnx->quic, packet->bytes + consumed_index,
                     packet->length - consumed_index, packet->length,
                     &consumed, (struct sockaddr*) & packet->addr_to, (struct sockaddr*) & packet->addr_local, packet->if_index_local,
-                    packet->received_ecn, current_time, packet->receive_time, &previous_destid, &first_cnx);
+                    packet->received_ecn, current_time, packet->receive_time, &previous_destid, &first_cnx, NULL);
 
                 if (ret == 0 && consumed > 0) {
                     consumed_index += consumed;

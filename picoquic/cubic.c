@@ -24,7 +24,7 @@
 #include <string.h>
 #include "cc_common.h"
 
-#define PICOQUIC_CUBIC_C 0.4
+#define PICOQUIC_CUBIC_C 0.6 /* slipstream: upstream 0.4 */
 #define PICOQUIC_CUBIC_BETA_ECN (7.0 / 8.0)
 #define PICOQUIC_CUBIC_BETA (3.0 / 4.0)
 /* Multiplicative decrease factor of RFC 9438, used when the "R" or "A"
@@ -87,7 +87,7 @@ static void cubic_set_options(picoquic_cubic_state_t* cubic_state)
 {
     char const* x = cubic_state->option_string;
 
-    cubic_state->beta_loss = PICOQUIC_CUBIC_BETA_ECN;
+    cubic_state->beta_loss = 19.0 / 20.0; /* slipstream: upstream PICOQUIC_CUBIC_BETA_ECN (7/8) */
     cubic_state->beta_ecn = 0;
 
     if (x != NULL) {
@@ -138,7 +138,7 @@ static void cubic_reset(picoquic_cubic_state_t* cubic_state, picoquic_path_t* pa
     cubic_state->option_string = option_string;
     cubic_set_options(cubic_state);
     cubic_state->reno_alpha = 1.0;
-    path_x->cwin = PICOQUIC_CWIN_INITIAL;
+    path_x->cwin = PICOQUIC_PATH_CWIN_INITIAL;
     cubic_state->alg_state = picoquic_cubic_alg_slow_start;
     cubic_state->ssthresh = UINT64_MAX;
     cubic_state->W_last_max = (double)cubic_state->ssthresh / (double)path_x->send_mtu;
@@ -148,7 +148,7 @@ static void cubic_reset(picoquic_cubic_state_t* cubic_state, picoquic_path_t* pa
     cubic_state->previous_alg_state = cubic_state->alg_state;
     cubic_state->previous_cwin = path_x->cwin;
     cubic_state->previous_ssthresh = UINT64_MAX;
-    cubic_state->W_reno = PICOQUIC_CWIN_INITIAL;
+    cubic_state->W_reno = PICOQUIC_PATH_CWIN_INITIAL;
     cubic_state->recovery_sequence = 0;
 }
 
@@ -227,7 +227,7 @@ static void cubic_enter_avoidance(
 /* RFC 9002 7.6.2: collapse to the minimum window, and slow start up to ssthresh. */
 static void cubic_enter_persistent_congestion(picoquic_path_t* path_x, picoquic_cubic_state_t* cubic_state, uint64_t current_time)
 {
-    path_x->cwin = PICOQUIC_CWIN_MINIMUM;
+    path_x->cwin = PICOQUIC_PATH_CWIN_MINIMUM;
     cubic_state->previous_start_of_epoch = cubic_state->start_of_epoch;
     cubic_state->start_of_epoch = current_time;
     cubic_state->alg_state = picoquic_cubic_alg_slow_start;
@@ -288,13 +288,13 @@ static void cubic_enter_recovery(picoquic_cnx_t * cnx,
     }
     /* Compute the new ssthresh */
     cubic_state->ssthresh = (uint64_t)(W_epoch * (double)path_x->send_mtu);
-    if (cubic_state->ssthresh < PICOQUIC_CWIN_MINIMUM) {
+    if (cubic_state->ssthresh < PICOQUIC_PATH_CWIN_MINIMUM) {
         /* If things are that bad, fall back to slow start */
 
         cubic_state->alg_state = picoquic_cubic_alg_slow_start;
         if (notification == picoquic_congestion_notification_persistent_congestion) {
             /* A finite ssthresh keeps the bandwidth estimate from undoing the collapse. */
-            cubic_state->ssthresh = PICOQUIC_CWIN_MINIMUM;
+            cubic_state->ssthresh = PICOQUIC_PATH_CWIN_MINIMUM;
         }
         else {
             cubic_state->ssthresh = UINT64_MAX;
@@ -302,8 +302,8 @@ static void cubic_enter_recovery(picoquic_cnx_t * cnx,
         }
         cubic_state->previous_start_of_epoch = cubic_state->start_of_epoch;
         cubic_state->start_of_epoch = current_time;
-        cubic_state->W_reno = PICOQUIC_CWIN_MINIMUM;
-        path_x->cwin = PICOQUIC_CWIN_MINIMUM;
+        cubic_state->W_reno = PICOQUIC_PATH_CWIN_MINIMUM;
+        path_x->cwin = PICOQUIC_PATH_CWIN_MINIMUM;
     }
     else {
         if (notification == picoquic_congestion_notification_persistent_congestion) {

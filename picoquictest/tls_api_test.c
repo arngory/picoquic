@@ -15759,7 +15759,7 @@ static int retry_token_length_test_one(size_t token_length)
     picoquic_test_tls_api_ctx_t* test_ctx = NULL;
     picoquic_connection_id_t fake_scid = { { 0x70, 0x6b, 0x23, 0x20, 0x70, 0x6b, 0x23, 0x20 }, 8 };
     picoquic_connection_id_t icid = picoquic_null_connection_id;
-    uint8_t packet[PICOQUIC_ENFORCED_INITIAL_MTU];
+    uint8_t packet[PICOQUIC_MAX_PACKET_SIZE];
     size_t packet_length = 0;
     int was_active = 0;
     int is_too_long = (token_length > PICOQUIC_NEW_TOKEN_MAX_LENGTH);

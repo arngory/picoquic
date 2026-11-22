@@ -1513,13 +1513,13 @@ static int picoquic_stream_network_input(picoquic_cnx_t* cnx, uint64_t stream_id
             }
 
             if (stream->stream_data_tree.size > 128 &&
-                ((uint64_t)stream->stream_data_tree.size) * 1536 > (stream->maxdata_local - stream->consumed_offset) * 6) {
+                ((uint64_t)stream->stream_data_tree.size) * 1536 > (stream->maxdata_local - stream->consumed_offset) * PICOQUIC_REORDER_MEMORY_FACTOR) {
                 /* This simple check detects abusive scenarios, like sending lots of tiny out of
                  * order packets */
                  ret = picoquic_connection_error(cnx, PICOQUIC_TRANSPORT_INTERNAL_ERROR, 0);
             }
             else if (cnx->nb_stream_data_nodes > 128 &&
-                cnx->nb_stream_data_nodes * 1536 > (cnx->maxdata_local - cnx->data_received) * 6) {
+                cnx->nb_stream_data_nodes * 1536 > (cnx->maxdata_local - cnx->data_received) * PICOQUIC_REORDER_MEMORY_FACTOR) {
                 /* Same check at the connection level, for tiny out of order packets spread over many streams */
                 ret = picoquic_connection_error(cnx, PICOQUIC_TRANSPORT_INTERNAL_ERROR, 0);
             }
@@ -2692,7 +2692,7 @@ picoquic_packet_t* picoquic_check_spurious_retransmission(picoquic_cnx_t* cnx,
             /* If the packet contained an ACK frame, perform the ACK of ACK pruning logic.
              * Record stream data as acknowledged, signal datagram frames as acknowledged.
              */
-            picoquic_process_ack_of_frames(cnx, p, 1);
+            picoquic_process_ack_of_frames(cnx, p, ack_data, 1, current_time);
 
 
             /* Update congestion control and statistics */
@@ -3728,8 +3728,8 @@ int picoquic_process_ack_of_stream_frame(picoquic_cnx_t* cnx, uint8_t* bytes,
 /* If the packet contained an ACK frame, perform the ACK of ACK pruning logic.
  * Record stream data as acknowledged, signal datagram frames as acknowledged.
  */
-void picoquic_process_ack_of_frames(picoquic_cnx_t* cnx, picoquic_packet_t* p, 
-    int is_spurious)
+void picoquic_process_ack_of_frames(picoquic_cnx_t* cnx, picoquic_packet_t* p, picoquic_ack_frame_data_t* ack_data,
+    int is_spurious, uint64_t current_time)
 {
     int ret = 0;
     size_t byte_index;
@@ -3771,6 +3771,15 @@ void picoquic_process_ack_of_frames(picoquic_cnx_t* cnx, picoquic_packet_t* p,
                 break;
             case picoquic_frame_type_handshake_done:
                 cnx->is_handshake_done_acked = 1;
+                byte_index += 1;
+                break;
+            case picoquic_frame_type_poll:
+                /* slipstream: an acked poll lets the congestion window grow. The packet's
+                 * bytes are already in ack_data: picoquic_process_ack_range records each
+                 * acked packet once. */
+                if (p->send_path != NULL && p->send_time > p->send_path->last_time_acked_data_frame_sent) {
+                    p->send_path->last_time_acked_data_frame_sent = current_time;
+                }
                 byte_index += 1;
                 break;
             case picoquic_frame_type_new_connection_id:
@@ -3928,7 +3937,7 @@ static int picoquic_process_ack_range(
                 /* If the packet contained an ACK frame, perform the ACK of ACK pruning logic.
                  * Record stream data as acknowledged, signal datagram frames as acknowledged.
                  */
-                picoquic_process_ack_of_frames(cnx, p, 0);
+                picoquic_process_ack_of_frames(cnx, p, ack_data, 0, current_time);
 
                 /* Keep track of reception of ACK of 1RTT data */
                 if (p->ptype == picoquic_packet_1rtt_protected &&
@@ -4057,7 +4066,8 @@ const uint8_t* picoquic_decode_ack_frame(picoquic_cnx_t* cnx, const uint8_t* byt
                     break;
                 }
 
-                if (range > 0) {
+                // disable spurious retransmission detection for 1-RTT packets
+                if (cnx->cnx_state != picoquic_state_ready && range > 0) {
                     p_retransmitted_previous = picoquic_check_spurious_retransmission(cnx, pc, pkt_ctx,
                         largest + 1 - range, largest, current_time, p_retransmitted_previous, &ack_data);
                 }
@@ -4390,7 +4400,10 @@ int picoquic_is_ack_needed_in_ctx(picoquic_cnx_t* cnx, picoquic_ack_context_t* a
     int ret = 0;
 
     if (ack_ctx->act[is_opportunistic].ack_needed) {
-        if (ack_ctx->act[is_opportunistic].is_immediate_ack_required) {
+        if (cnx->no_ack_delay) {
+            ret = 1;
+        }
+        else if (ack_ctx->act[is_opportunistic].is_immediate_ack_required) {
             ret = 1;
         }
         else if (pc != picoquic_packet_context_application || ack_ctx->act[is_opportunistic].ack_after_fin) {
@@ -5024,6 +5037,15 @@ const uint8_t* picoquic_decode_path_challenge_frame(picoquic_cnx_t* cnx, const u
                     }
                 }
                 tuple = tuple->next_tuple;
+            }
+
+            if (!is_valid && cnx->is_multipath_enabled && path_x->first_tuple != NULL) {
+                /* slipstream: queries reach the peer through resolvers, from addresses
+                 * that keep changing. With multipath the path ID names the path:
+                 * answer the challenge on the first tuple. */
+                is_valid = 1;
+                path_x->first_tuple->challenge_response = challenge_response;
+                path_x->first_tuple->response_required = 1;
             }
 
             if (!is_valid) {
@@ -6731,6 +6753,7 @@ int picoquic_decode_frames(picoquic_cnx_t* cnx, picoquic_path_t * path_x, const 
         }
         else if (epoch != picoquic_epoch_0rtt && epoch != picoquic_epoch_1rtt && first_byte != picoquic_frame_type_padding
             && first_byte != picoquic_frame_type_ping
+            && first_byte != picoquic_frame_type_poll
             && first_byte != picoquic_frame_type_connection_close
             && first_byte != picoquic_frame_type_crypto_hs) {
             picoquic_connection_error(cnx, PICOQUIC_TRANSPORT_PROTOCOL_VIOLATION, first_byte);
@@ -6787,6 +6810,9 @@ int picoquic_decode_frames(picoquic_cnx_t* cnx, picoquic_path_t * path_x, const 
             case picoquic_frame_type_ping:
                 bytes = picoquic_skip_0len_frame(bytes, bytes_max);
                 ack_needed = 1;
+                break;
+            case picoquic_frame_type_poll:
+                bytes = picoquic_skip_0len_frame(bytes, bytes_max);
                 break;
             case picoquic_frame_type_data_blocked:
                 bytes = picoquic_decode_blocked_frame(cnx, bytes, bytes_max);
@@ -7149,6 +7175,9 @@ int picoquic_skip_frame(const uint8_t* bytes, size_t bytes_maxsize, size_t* cons
         case picoquic_frame_type_ping:
             bytes = picoquic_skip_0len_frame(bytes, bytes_max);
             *pure_ack = 0;
+            break;
+        case picoquic_frame_type_poll:
+            bytes = picoquic_skip_0len_frame(bytes, bytes_max);
             break;
         case picoquic_frame_type_data_blocked:
             bytes = picoquic_skip_single_varint_frame(bytes, bytes_max);

@@ -866,8 +866,20 @@ void picoquic_finalize_and_protect_packet_tuple(picoquic_cnx_t* cnx,
     size_t* send_length, uint8_t* send_buffer, size_t send_buffer_max,
     picoquic_path_t* path_x, uint64_t current_time, picoquic_tuple_t* tuple, int is_ack_eliciting)
 {
-    if (length != 0 && length < header_length) {
+    /* slipstream: PICOQUIC_MIN_SEGMENT_SIZE is 32 (upstream 256), so the room left for a
+     * coalesced packet can be less than its header, a frame and the checksum. Send nothing
+     * then, whatever the packet type:
+     * - a packet without frames is a protocol violation (RFC 9000, 12.4) that makes the
+     *   peer close the connection;
+     * - a packet that does not fit would be written past send_buffer_max: some frames are
+     *   written without a check of the room left (the handshake PINGs), because upstream's
+     *   256 bytes always held them. An MTU probe is meant to exceed the path MTU, which the
+     *   callers pass here; its size is bounded by the whole buffer (picoquic_prepare_mtu_probe).
+     * packet->length is cleared too, so that the caller recycles the packet. */
+    if (length != 0 && (length <= header_length ||
+        (length + checksum_overhead > send_buffer_max && !packet->is_mtu_probe))) {
         length = 0;
+        packet->length = 0;
     }
 
     if (ret == 0 && length > 0) {
@@ -1398,9 +1410,15 @@ int picoquic_prepare_packet_0rtt(picoquic_cnx_t* cnx, picoquic_path_t * path_x, 
 
 
     
-    /* Consider sending 0-RTT */
+    /* Consider sending 0-RTT.
+     * slipstream: with PICOQUIC_MIN_SEGMENT_SIZE at 32 (upstream 256), the room left in
+     * the 0-RTT window or the datagram can be less than the header and checksum: a
+     * packet without frames would go out, a protocol violation (RFC 9000, 12.4) that
+     * makes the server close the connection. Send nothing then, as upstream does
+     * below PICOQUIC_MIN_SEGMENT_SIZE. */
     if ((stream == NULL && cnx->first_misc_frame == NULL && padding_required == 0) || 
-        send_buffer_max < PICOQUIC_MIN_SEGMENT_SIZE) {
+        send_buffer_max < PICOQUIC_MIN_SEGMENT_SIZE ||
+        send_buffer_max <= header_length + checksum_overhead) {
         length = 0;
     } else {
         /* If present, send misc frame */
@@ -1419,11 +1437,6 @@ int picoquic_prepare_packet_0rtt(picoquic_cnx_t* cnx, picoquic_path_t * path_x, 
 
         length = bytes_next - bytes;
 
-        if (more_data) {
-            *next_wake_time = current_time;
-            SET_LAST_WAKE(cnx->quic, PICOQUIC_SENDER);
-        }
-
         if (stream_tried_and_failed) {
             path_x->last_sender_limited_time = current_time;
         }
@@ -1431,6 +1444,16 @@ int picoquic_prepare_packet_0rtt(picoquic_cnx_t* cnx, picoquic_path_t * path_x, 
         /* Add padding if required */
         if (padding_required) {
             length = picoquic_pad_to_target_length(bytes, length, send_buffer_max - checksum_overhead);
+        }
+
+        if (length <= header_length) {
+            /* slipstream: no frame fitted. Send nothing, and do not wake up at once
+             * for the data that waits: it goes when acks open the window. */
+            length = 0;
+        }
+        else if (more_data) {
+            *next_wake_time = current_time;
+            SET_LAST_WAKE(cnx->quic, PICOQUIC_SENDER);
         }
     }
 
@@ -3250,6 +3273,15 @@ int picoquic_prepare_packet_ready(picoquic_cnx_t* cnx, picoquic_path_t* path_x, 
                             is_pure_ack = 0;
                         }
                     }
+
+                    // if we didn't add any frames, we need to check if we need to send a ping frame
+                    if (ret == 0 && cnx->is_poll_requested && length <= header_length) {
+                        if (bytes_next < bytes_max) {
+                            *bytes_next++ = picoquic_frame_type_poll;
+                            length++;
+                            cnx->is_poll_requested = 0;
+                        }
+                    }
                 } /* end of CC */
             } /* End of pacing */
             else if (cnx->priority_limit_for_bypass > 0 && cnx->nb_paths == 1) {
@@ -3640,8 +3672,18 @@ void picoquic_handle_send_train_statistics(picoquic_cnx_t* cnx, picoquic_path_t*
     }
 }
 
-/* Prepare next packet to send, or nothing.. */
-int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
+/* slipstream: whether a packet can be sent on path_x when the application names it. */
+static int picoquic_is_path_usable_for_send(const picoquic_path_t* path_x)
+{
+    return !path_x->path_is_demoted && !path_x->path_abandon_received && !path_x->path_abandon_sent &&
+        path_x->first_tuple != NULL && !path_x->first_tuple->challenge_failed &&
+        path_x->first_tuple->p_remote_cnxid != NULL;
+}
+
+/* Prepare next packet to send, or nothing..
+ * slipstream: path_id_request >= 0 sends on that path (the path of the DNS query
+ * that this packet answers), -1 lets picoquic choose. */
+int picoquic_prepare_packet_path_ex(picoquic_cnx_t* cnx, int path_id_request,
     uint64_t current_time, uint8_t* send_buffer, size_t send_buffer_max, size_t* send_length,
     struct sockaddr_storage * p_addr_to, struct sockaddr_storage * p_addr_from, int* if_index, size_t* send_msg_size)
 {
@@ -3663,12 +3705,27 @@ int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
         uint64_t initial_next_time;
         size_t coalesced_packet_size = 0;
 
+        int segment_count = 0;
+
         picoquic_handle_send_paths(cnx, current_time, &next_wake_time,
             &path_x, &tuple, p_addr_to, p_addr_from, if_index,
             send_buffer_max, send_msg_size);
+        /* slipstream: the requested path replaces picoquic's choice only if a packet can go on it:
+         * not demoted or abandoned, its challenge not failed, and with a connection ID of the peer
+         * (the short header needs one). Otherwise picoquic's choice stands. */
+        if (path_id_request >= 0 && path_id_request < cnx->nb_paths && cnx->path[path_id_request] != NULL &&
+            cnx->path[path_id_request] != path_x && picoquic_is_path_usable_for_send(cnx->path[path_id_request])) {
+            path_x = cnx->path[path_id_request];
+            tuple = path_x->first_tuple;
+            picoquic_set_path_addresses_from_tuple(tuple, p_addr_to, p_addr_from, if_index);
+            if (send_msg_size != NULL) {
+                *send_msg_size = path_x->send_mtu;
+            }
+        }
         initial_next_time = next_wake_time;
 
-        while (ret == 0)
+        /* slipstream: at most PICOQUIC_MAX_GSO_SEGMENTS segments, the GSO limit of the kernel */
+        while (ret == 0 && segment_count < PICOQUIC_MAX_GSO_SEGMENTS)
         {
             /* Create a new packet, which may include several segments */
             int is_initial_sent = 0;
@@ -3697,7 +3754,7 @@ int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
             }
 
             /* Send the available segments in that packet. */
-            while (ret == 0)
+            while (ret == 0 && segment_count < PICOQUIC_MAX_GSO_SEGMENTS)
             {
                 /* Create the segments that fit in the new packet */
                 size_t available = packet_max;
@@ -3751,6 +3808,7 @@ int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
 
                     if (ret == 0) {
                         coalesced_packet_size += segment_length;
+                        segment_count++;
                         if (packet->length == 0) {
                             /* Nothing more to send */
                             picoquic_recycle_packet(cnx->quic, packet);
@@ -3762,6 +3820,9 @@ int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
                         }
                         else if (segment_length == 0) {
                             DBG_PRINTF("Send bug: segment length = %zu, packet length = %zu\n", segment_length, packet->length);
+                            break;
+                        } else if (segment_count == PICOQUIC_MAX_GSO_SEGMENTS) {
+                            DBG_PRINTF("Reached max segment count, packet length = %zu\n", packet->length);
                             break;
                         }
                     }
@@ -3869,6 +3930,14 @@ int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
     picoquic_reinsert_by_wake_time(cnx->quic, cnx, next_wake_time);
 
     return ret;
+}
+
+int picoquic_prepare_packet_ex(picoquic_cnx_t* cnx,
+    uint64_t current_time, uint8_t* send_buffer, size_t send_buffer_max, size_t* send_length,
+    struct sockaddr_storage * p_addr_to, struct sockaddr_storage * p_addr_from, int* if_index, size_t* send_msg_size)
+{
+    return picoquic_prepare_packet_path_ex(cnx, -1, current_time, send_buffer, send_buffer_max, send_length,
+        p_addr_to, p_addr_from, if_index, send_msg_size);
 }
 
 int picoquic_prepare_packet(picoquic_cnx_t* cnx,

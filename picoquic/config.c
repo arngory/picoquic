@@ -950,6 +950,18 @@ picoquic_quic_t* picoquic_create_and_configure(picoquic_quic_config_t* config,
             picoquic_set_mtu_max(quic, config->mtu_max);
         }
 
+        if (config->initial_send_mtu_ipv4 < 0 || config->initial_send_mtu_ipv6 < 0) {
+            ret = PICOQUIC_ERROR_INITIAL_TOO_SHORT;
+        }
+        else if (config->initial_send_mtu_ipv4 > 0 || config->initial_send_mtu_ipv6 > 0) {
+            ret = picoquic_set_initial_send_mtu(quic, (uint32_t)config->initial_send_mtu_ipv4, (uint32_t)config->initial_send_mtu_ipv6);
+        }
+        if (ret != 0) {
+            fprintf(stderr, "Initial send MTU %d (IPv4), %d (IPv6) not in [%d, %d], or 0.\n",
+                config->initial_send_mtu_ipv4, config->initial_send_mtu_ipv6,
+                PICOQUIC_ENFORCED_INITIAL_MTU, PICOQUIC_MAX_PACKET_SIZE);
+        }
+
         if (config->cnx_id_length != -1) {
             if (picoquic_set_default_connection_id_length(quic, (uint8_t)config->cnx_id_length) != 0) {
                 fprintf(stderr, "Could not set CNX-ID length #%d.\n", config->cnx_id_length);

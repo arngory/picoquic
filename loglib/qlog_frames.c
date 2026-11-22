@@ -531,6 +531,7 @@ static const uint8_t* qlog_frame_body(FILE* f, const uint8_t* first_byte, const 
             }
             break;
         case picoquic_frame_type_ping:
+        case picoquic_frame_type_poll:
             break;
         case picoquic_frame_type_ack:
             bytes = qlog_frame_ack(f, first_byte, bytes_max, 0, 0);
