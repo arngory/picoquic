@@ -35,8 +35,14 @@ extern "C" {
 #ifndef PICOQUIC_MAX_PACKET_SIZE
 #define PICOQUIC_MAX_PACKET_SIZE 1536
 #endif
-#define PICOQUIC_MIN_SEGMENT_SIZE 256
-#define PICOQUIC_ENFORCED_INITIAL_MTU 1200
+/* slipstream: QUIC over DNS carries packets far below the 1200 bytes of RFC 9000.
+ * Both values can be set at build time (-DPICOQUIC_ENFORCED_INITIAL_MTU=64). */
+#ifndef PICOQUIC_MIN_SEGMENT_SIZE
+#define PICOQUIC_MIN_SEGMENT_SIZE 32
+#endif
+#ifndef PICOQUIC_ENFORCED_INITIAL_MTU
+#define PICOQUIC_ENFORCED_INITIAL_MTU 129
+#endif
 #define PICOQUIC_CHALLENGE_RESERVE 64 /* amplification budget kept for each challenge repeat */
 #define PICOQUIC_ENFORCED_INITIAL_CID_LENGTH 8
 #define PICOQUIC_PRACTICAL_MAX_MTU 1440
