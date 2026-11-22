@@ -1,3 +1,5 @@
+> This is arngory's fork for slipstream: see [FORK.md](FORK.md) for the patches it carries and how it is maintained.
+
 # picoquic
 
 Minimalist implementation of the QUIC protocol, as defined by the IETF.
