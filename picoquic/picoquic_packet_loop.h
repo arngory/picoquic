@@ -148,14 +148,16 @@ typedef enum {
  */
 typedef enum {
     picoquic_packet_loop_ready = 0, /* Argument type: packet loop options */
-    picoquic_packet_loop_before_select, /* Argument type size_t*: nb packets received */
     picoquic_packet_loop_after_receive, /* Argument type size_t*: nb packets received */
     picoquic_packet_loop_after_send, /* Argument type size_t*: nb packets sent */
     picoquic_packet_loop_port_update, /* argument type struct_sockaddr*: new address for wakeup */
     picoquic_packet_loop_time_check, /* argument type packet_loop_time_check_arg_t*. Optional. */
     picoquic_packet_loop_system_call_duration, /* argument type packet_loop_system_call_duration_t*. Optional. */
     picoquic_packet_loop_wake_up, /* no argument (void* NULL). Used when loop wakeup is supported */
-    picoquic_packet_loop_alt_port /* Provide alt port for testing multipath or migration */
+    picoquic_packet_loop_alt_port, /* Provide alt port for testing multipath or migration */
+    /* slipstream: called by slipstream's own loop (slipstream_sockloop.c) before it waits
+     * for packets; picoquic's loops never call it. Argument type picoquic_socket_ctx_t*: the loop's sockets. */
+    picoquic_packet_loop_before_select
 } picoquic_packet_loop_cb_enum;
 
 /* System call statistics.
