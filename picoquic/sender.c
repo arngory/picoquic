@@ -866,8 +866,20 @@ void picoquic_finalize_and_protect_packet_tuple(picoquic_cnx_t* cnx,
     size_t* send_length, uint8_t* send_buffer, size_t send_buffer_max,
     picoquic_path_t* path_x, uint64_t current_time, picoquic_tuple_t* tuple, int is_ack_eliciting)
 {
-    if (length != 0 && length < header_length) {
+    /* slipstream: PICOQUIC_MIN_SEGMENT_SIZE is 32 (upstream 256), so the room left for a
+     * coalesced packet can be less than its header, a frame and the checksum. Send nothing
+     * then, whatever the packet type:
+     * - a packet without frames is a protocol violation (RFC 9000, 12.4) that makes the
+     *   peer close the connection;
+     * - a packet that does not fit would be written past send_buffer_max: some frames are
+     *   written without a check of the room left (the handshake PINGs), because upstream's
+     *   256 bytes always held them. An MTU probe is meant to exceed the path MTU, which the
+     *   callers pass here; its size is bounded by the whole buffer (picoquic_prepare_mtu_probe).
+     * packet->length is cleared too, so that the caller recycles the packet. */
+    if (length != 0 && (length <= header_length ||
+        (length + checksum_overhead > send_buffer_max && !packet->is_mtu_probe))) {
         length = 0;
+        packet->length = 0;
     }
 
     if (ret == 0 && length > 0) {

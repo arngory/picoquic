@@ -441,6 +441,7 @@ int reset_stream_at_loss_test(void);
 int stream_data_nodes_test(void);
 int stream_data_nodes_attack_test(void);
 int vn_bounds_test(void);
+int small_mtu_handshake_test(void);
 int initial_send_mtu_bounds_test(void);
 int stream_data_nodes_window_test(void);
 int stream_data_nodes_limit_test(void);

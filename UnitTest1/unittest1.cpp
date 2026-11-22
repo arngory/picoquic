@@ -3153,6 +3153,12 @@ namespace UnitTest1
             Assert::AreEqual(ret, 0);
         }
 
+        TEST_METHOD(small_mtu_handshake) {
+            int ret = small_mtu_handshake_test();
+
+            Assert::AreEqual(ret, 0);
+        }
+
         TEST_METHOD(initial_send_mtu_bounds) {
             int ret = initial_send_mtu_bounds_test();
 

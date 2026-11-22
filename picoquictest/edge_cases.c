@@ -3271,6 +3271,81 @@ int vn_bounds_test(void)
     return ret;
 }
 
+/* slipstream: handshake and transfer at a small send MTU on both sides. The room left for a
+ * packet coalesced after the server's Initial can be less than a header, a frame and the
+ * checksum: picoquic must then send nothing, rather than a packet without frames (which
+ * the client closes the connection for, PROTOCOL_VIOLATION) or a packet written past the
+ * send buffer (the server's handshake PING). */
+static int small_mtu_one(uint32_t mtu, uint8_t client_cid_length, int multipath)
+{
+    uint64_t simulated_time = 0;
+    picoquic_test_tls_api_ctx_t* test_ctx = NULL;
+    test_api_stream_desc_t scenario[] = { { 4, 0, 257, 2000 }, { 8, 4, 531, 3000 } };
+    picoquic_connection_id_t icid = { { 0x5a, 0x11, 3, 4, 5, 6, 7, 8 }, 8 };
+    int ret;
+
+    icid.id[2] = (uint8_t)mtu;
+    icid.id[3] = client_cid_length;
+    ret = tls_api_init_ctx_ex(&test_ctx, PICOQUIC_INTERNAL_TEST_VERSION_1, PICOQUIC_TEST_SNI, PICOQUIC_TEST_ALPN,
+        &simulated_time, NULL, NULL, 0, 1, 0, &icid);
+    if (ret == 0) {
+        picoquic_delete_cnx(test_ctx->cnx_client);
+        test_ctx->cnx_client = NULL;
+        if (picoquic_set_default_connection_id_length(test_ctx->qclient, client_cid_length) != 0 ||
+            picoquic_set_initial_send_mtu(test_ctx->qclient, mtu, mtu) != 0 ||
+            picoquic_set_initial_send_mtu(test_ctx->qserver, mtu, mtu) != 0) {
+            DBG_PRINTF("Cannot set CID length %d or MTU %u", client_cid_length, mtu);
+            ret = -1;
+        }
+    }
+    if (ret == 0) {
+        picoquic_set_mtu_max(test_ctx->qclient, mtu);
+        if (multipath) {
+            picoquic_set_default_multipath_option(test_ctx->qclient, 1);
+            picoquic_set_default_multipath_option(test_ctx->qserver, 1);
+        }
+        test_ctx->cnx_client = picoquic_create_cnx(test_ctx->qclient, icid, picoquic_null_connection_id,
+            (struct sockaddr*)&test_ctx->server_addr, simulated_time, PICOQUIC_INTERNAL_TEST_VERSION_1,
+            PICOQUIC_TEST_SNI, PICOQUIC_TEST_ALPN, 1);
+        if (test_ctx->cnx_client == NULL) {
+            ret = -1;
+        }
+    }
+    if (ret == 0) {
+        ret = tls_api_one_scenario_body(test_ctx, &simulated_time, scenario, sizeof(scenario), 0, 0, 0, 0, 0);
+        if (ret != 0) {
+            DBG_PRINTF("MTU %u, client CID %d, multipath %d: client error 0x%" PRIx64 "/0x%" PRIx64 ", server %s",
+                mtu, client_cid_length, multipath, test_ctx->cnx_client->local_error, test_ctx->cnx_client->remote_error,
+                (test_ctx->cnx_server == NULL) ? "none" : "present");
+        }
+    }
+
+    if (test_ctx != NULL) {
+        tls_api_delete_ctx(test_ctx);
+    }
+    return ret;
+}
+
+int small_mtu_handshake_test(void)
+{
+    /* Cases where the series sent a packet without frames (an empty Initial or Handshake,
+     * PROTOCOL_VIOLATION at the client), or wrote the server's handshake PING past a
+     * 1536-byte send buffer (MTU 1523 to 1536). */
+    const uint32_t cases[][2] = { { 137, 8 }, { 110, 8 }, { 129, 4 }, { 120, 16 }, { 150, 20 }, { 90, 4 },
+        { 1530, 8 }, { 1536, 8 } };
+    int ret = 0;
+
+    for (size_t i = 0; ret == 0 && i < sizeof(cases) / sizeof(cases[0]); i++) {
+        if (cases[i][0] < PICOQUIC_ENFORCED_INITIAL_MTU) {
+            continue;
+        }
+        for (int multipath = 0; ret == 0 && multipath < 2; multipath++) {
+            ret = small_mtu_one(cases[i][0], (uint8_t)cases[i][1], multipath);
+        }
+    }
+    return ret;
+}
+
 /* slipstream: picoquic_set_initial_send_mtu takes 0 (upstream's value) or a value in
  * [PICOQUIC_ENFORCED_INITIAL_MTU, PICOQUIC_MAX_PACKET_SIZE], and nothing else:
  * below about 58 bytes the client's Initial padding was a negative memset, up to the
