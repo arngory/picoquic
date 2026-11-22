@@ -1398,9 +1398,15 @@ int picoquic_prepare_packet_0rtt(picoquic_cnx_t* cnx, picoquic_path_t * path_x, 
 
 
     
-    /* Consider sending 0-RTT */
+    /* Consider sending 0-RTT.
+     * slipstream: with PICOQUIC_MIN_SEGMENT_SIZE at 32 (upstream 256), the room left in
+     * the 0-RTT window or the datagram can be less than the header and checksum: a
+     * packet without frames would go out, a protocol violation (RFC 9000, 12.4) that
+     * makes the server close the connection. Send nothing then, as upstream does
+     * below PICOQUIC_MIN_SEGMENT_SIZE. */
     if ((stream == NULL && cnx->first_misc_frame == NULL && padding_required == 0) || 
-        send_buffer_max < PICOQUIC_MIN_SEGMENT_SIZE) {
+        send_buffer_max < PICOQUIC_MIN_SEGMENT_SIZE ||
+        send_buffer_max <= header_length + checksum_overhead) {
         length = 0;
     } else {
         /* If present, send misc frame */
@@ -1419,11 +1425,6 @@ int picoquic_prepare_packet_0rtt(picoquic_cnx_t* cnx, picoquic_path_t * path_x, 
 
         length = bytes_next - bytes;
 
-        if (more_data) {
-            *next_wake_time = current_time;
-            SET_LAST_WAKE(cnx->quic, PICOQUIC_SENDER);
-        }
-
         if (stream_tried_and_failed) {
             path_x->last_sender_limited_time = current_time;
         }
@@ -1431,6 +1432,16 @@ int picoquic_prepare_packet_0rtt(picoquic_cnx_t* cnx, picoquic_path_t * path_x, 
         /* Add padding if required */
         if (padding_required) {
             length = picoquic_pad_to_target_length(bytes, length, send_buffer_max - checksum_overhead);
+        }
+
+        if (length <= header_length) {
+            /* slipstream: no frame fitted. Send nothing, and do not wake up at once
+             * for the data that waits: it goes when acks open the window. */
+            length = 0;
+        }
+        else if (more_data) {
+            *next_wake_time = current_time;
+            SET_LAST_WAKE(cnx->quic, PICOQUIC_SENDER);
         }
     }
 
