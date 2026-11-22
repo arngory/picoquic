@@ -96,7 +96,9 @@ extern "C" {
 #define PICOQUIC_MICROSEC_STATELESS_RESET_INTERVAL_DEFAULT 100000ull /* max 10 stateless reset by second by default */
 
 #define PICOQUIC_CWIN_INITIAL (10 * PICOQUIC_MAX_PACKET_SIZE)
+#define PICOQUIC_PATH_CWIN_INITIAL (10 * path_x->send_mtu)
 #define PICOQUIC_CWIN_MINIMUM (2 * PICOQUIC_MAX_PACKET_SIZE)
+#define PICOQUIC_PATH_CWIN_MINIMUM (2 * path_x->send_mtu)
 
 #define PICOQUIC_INCOMING_NOT_DECRYPTED_MAX (PICOQUIC_CWIN_INITIAL / PICOQUIC_MAX_PACKET_SIZE) /* peer cannot send more than the initial window before an ACK */
 

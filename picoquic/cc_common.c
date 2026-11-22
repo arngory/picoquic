@@ -248,10 +248,10 @@ uint64_t picoquic_cc_update_cwin_for_long_rtt(picoquic_path_t * path_x) {
     uint64_t min_cwnd;
 
     if (path_x->rtt_min > PICOQUIC_TARGET_SATELLITE_RTT) {
-        min_cwnd = (uint64_t)((double)PICOQUIC_CWIN_INITIAL * (double)PICOQUIC_TARGET_SATELLITE_RTT / (double)PICOQUIC_TARGET_RENO_RTT);
+        min_cwnd = (uint64_t)((double)PICOQUIC_PATH_CWIN_INITIAL * (double)PICOQUIC_TARGET_SATELLITE_RTT / (double)PICOQUIC_TARGET_RENO_RTT);
     }
     else {
-        min_cwnd = (uint64_t)((double)PICOQUIC_CWIN_INITIAL * (double)path_x->rtt_min / (double)PICOQUIC_TARGET_RENO_RTT);
+        min_cwnd = (uint64_t)((double)PICOQUIC_PATH_CWIN_INITIAL * (double)path_x->rtt_min / (double)PICOQUIC_TARGET_RENO_RTT);
     }
 
     /* Return increased cwin, if larger than current cwin. */
