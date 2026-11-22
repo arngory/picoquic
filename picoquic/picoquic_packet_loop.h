@@ -148,6 +148,7 @@ typedef enum {
  */
 typedef enum {
     picoquic_packet_loop_ready = 0, /* Argument type: packet loop options */
+    picoquic_packet_loop_before_select, /* Argument type size_t*: nb packets received */
     picoquic_packet_loop_after_receive, /* Argument type size_t*: nb packets received */
     picoquic_packet_loop_after_send, /* Argument type size_t*: nb packets sent */
     picoquic_packet_loop_port_update, /* argument type struct_sockaddr*: new address for wakeup */
@@ -223,6 +224,11 @@ typedef struct st_picoquic_packet_loop_param_t {
      * same family, or an entry whose family differs from a non-zero local_af,
      * are rejected. */
     struct sockaddr_storage local_addr[PICOQUIC_PACKET_LOOP_LOCAL_ADDR_MAX];
+    /* slipstream: DNS encoding and decoding in its own loop */
+    int is_client;
+    ssize_t (*decode)(void* slot_p, void* callback_ctx, unsigned char** dest_buf, const unsigned char* src_buf, size_t src_buf_len, struct sockaddr_storage *peer_addr, struct sockaddr_storage *local_addr);
+    ssize_t (*encode)(void* slot_p, void* callback_ctx, unsigned char** dest_buf, const unsigned char* src_buf, size_t src_buf_len, size_t* segment_len, struct sockaddr_storage *peer_addr, struct sockaddr_storage *local_addr);
+    int64_t delay_max;
 } picoquic_packet_loop_param_t;
 
 /* Returns the entry of param->local_addr for the address family af, or NULL
@@ -348,6 +354,18 @@ struct st_picoquic_network_thread_ctx_t {
     void* af_xdp;
 };
 
+
+#ifndef _WINDOWS
+/* slipstream: its own loop waits on its UDP sockets and the wake up pipe with this
+ * function, whichever of poll() and select() this build uses. Returns the bytes
+ * received (0 on a timeout or a wake up, then *is_wake_up_event says which), -1 on error. */
+int picoquic_packet_loop_wait_udp(picoquic_socket_ctx_t* s_ctx, int nb_sockets,
+    struct sockaddr_storage* addr_from, struct sockaddr_storage* addr_dest, int* dest_if,
+    unsigned char* received_ecn, uint8_t* buffer, int buffer_max, int64_t delta_t,
+    int* is_wake_up_event, picoquic_network_thread_ctx_t* thread_ctx, int* socket_rank);
+#endif
+
+
 picoquic_network_thread_ctx_t* picoquic_start_network_thread(
     picoquic_quic_t* quic,
     picoquic_packet_loop_param_t* param,
@@ -452,6 +470,8 @@ picoquic_network_thread_ctx_t* picoquic_start_custom_network_thread_qmux(
     picoquic_custom_thread_setname_fn thread_setname_fn,
     char const* thread_name,
     picoquic_packet_loop_cb_fn loop_callback, void* loop_callback_ctx, int* ret);
+
+void picoquic_open_network_wake_up(picoquic_network_thread_ctx_t* thread_ctx, int *ret);
 
 /* Implementations of picoquic_custom_thread_create_fn and 
 * picoquic_custom_thread_delete_fn for the native thread types.
