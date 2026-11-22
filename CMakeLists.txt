@@ -475,6 +475,7 @@ endif ()
 # set_picoquic_compile_settings(TARGET) makes is easy to consistently
 # assign compiler build options to each of the following targets
 macro(set_picoquic_compile_settings)
+    message(STATUS "PICOQUIC_ADDITIONAL_C_FLAGS in picoquic: ${PICOQUIC_ADDITIONAL_C_FLAGS}")
     set_target_properties(${ARGV0}
         PROPERTIES
             C_STANDARD 11
@@ -487,23 +488,23 @@ macro(set_picoquic_compile_settings)
             CXX_EXTENSIONS YES)
     target_compile_options(${ARGV0}
         PRIVATE
-            $<$<C_COMPILER_ID:Clang>: -O3 -Wall -fno-exceptions
+            $<$<C_COMPILER_ID:Clang>: -Wall
                 -fno-signed-zeros -fno-trapping-math
                 ${PICOQUIC_ADDITIONAL_C_FLAGS}>
-            $<$<C_COMPILER_ID:AppleClang>: -O3 -Wall -fno-exceptions
+            $<$<C_COMPILER_ID:AppleClang>: -Wall
                 -fno-signed-zeros -fno-trapping-math
                 ${PICOQUIC_ADDITIONAL_C_FLAGS}>
-            $<$<C_COMPILER_ID:GNU>: -O3 -Wall -fno-exceptions
+            $<$<C_COMPILER_ID:GNU>: -Wall
                 -fno-signed-zeros -frename-registers -fno-trapping-math
                 ${PICOQUIC_ADDITIONAL_C_FLAGS}>
             $<$<C_COMPILER_ID:MSVC>: >
-            $<$<CXX_COMPILER_ID:Clang>: -O3 -Wall -fno-exceptions
+            $<$<CXX_COMPILER_ID:Clang>: -Wall
                 -fno-signed-zeros -fno-trapping-math
                 ${PICOQUIC_ADDITIONAL_CXX_FLAGS}>
-            $<$<CXX_COMPILER_ID:AppleClang>: -O3 -Wall -fno-exceptions
+            $<$<CXX_COMPILER_ID:AppleClang>: -Wall
                 -fno-signed-zeros -fno-trapping-math
                 ${PICOQUIC_ADDITIONAL_CXX_FLAGS}>
-            $<$<CXX_COMPILER_ID:GNU>: -O3 -Wall -fno-exceptions
+            $<$<CXX_COMPILER_ID:GNU>: -Wall
                 -fno-signed-zeros -frename-registers -fno-trapping-math
                 ${PICOQUIC_ADDITIONAL_CXX_FLAGS}>
             $<$<CXX_COMPILER_ID:MSVC>: >)
@@ -898,3 +899,9 @@ configure_package_config_file(${PROJECT_NAME}-config.cmake.in ${CMAKE_CURRENT_BI
 write_basic_package_version_file(${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config-version.cmake VERSION ${PROJECT_VERSION} COMPATIBILITY ExactVersion)
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config.cmake ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}-config-version.cmake DESTINATION ${INSTALL_CONFIG_DIR})
+
+set(PICOQUIC_ADDITIONAL_C_FLAGS ${PICOQUIC_ADDITIONAL_C_FLAGS} PARENT_SCOPE)
+set(PICOQUIC_ADDITIONAL_CXX_FLAGS ${PICOQUIC_ADDITIONAL_CXX_FLAGS} PARENT_SCOPE)
+set(PICOQUIC_LINKER_FLAGS ${PICOQUIC_LINKER_FLAGS} PARENT_SCOPE)
+set(PICOQUIC_COMPILE_DEFINITIONS "${PICOQUIC_COMPILE_DEFINITIONS}" PARENT_SCOPE)
+set(CMAKE_REQUIRED_LIBRARIES "${CMAKE_REQUIRED_LIBRARIES}" PARENT_SCOPE)
